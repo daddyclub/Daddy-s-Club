@@ -1,0 +1,39 @@
+[workspace]
+members = ["programs/*"]
+resolver = "2"
+
+# Макроси Anchor розгортають cfg, яких хостова ціль не знає: target_os="solana"
+# існує лише для SBF, а custom-heap/custom-panic вмикає лінкер програми.
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(target_os, values("solana"))',
+  'cfg(feature, values("custom-heap", "custom-panic", "anchor-debug"))',
+] }
+
+[workspace.dependencies]
+anchor-lang = "0.32.1"
+anchor-spl = { version = "0.32.1", features = [
+  "token_2022",
+  "token_2022_extensions",
+] }
+
+# ⚠️ Піни, не останні версії. spl-transfer-hook-interface 2.x і
+# spl-tlv-account-resolution 0.11.x тягнуть spl-list-view 0.1.0, який не
+# збирається на rustc 1.97.1 (E0277), а полагодженої версії не існує —
+# на crates.io лише 0.0.0 і 0.1.0. Перевірено спайком 2026-08-26.
+# Підняття цих двох рядків ламає збірку. Див. docs/PLAN.md → Complexity Tracking.
+spl-transfer-hook-interface = "0.10.0"
+spl-tlv-account-resolution = "0.9.0"
+spl-discriminator = "0.4.1"
+
+# overflow-checks у release — не оптимізація, а вимога SC-003/SC-004: мовчазне
+# переповнення в індексі виплат виглядало б як загублені кошти власників.
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+
+[profile.release.build-override]
+opt-level = 3
+incremental = false
+codegen-units = 1

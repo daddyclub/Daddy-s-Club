@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+target/
+.turbo/
+
+.env
+.env.*
+!.env.example
+
+*-keypair.json
+*.pem
+
+*.md
+!README.md
