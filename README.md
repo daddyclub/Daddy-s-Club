@@ -13,7 +13,7 @@
 ## Стек
 
 Anchor 0.32.1 · Rust 1.97.1 · Agave 4.2.0 · Token-2022 з Transfer Hook ·
-pnpm 9 + Turborepo · TypeScript 5.9 strict · Biome · Vitest · React 18 + Vite 5.
+pnpm 9 workspaces · TypeScript 5.9 strict · Biome · Vitest · React 18 + Vite 5.
 
 Бази даних і бекенду немає навмисно: канонічний стан живе в акаунтах Solana,
 інтерфейс читає їх напряму через RPC.

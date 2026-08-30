@@ -14,9 +14,11 @@
     "@daddys-club/sdk": "workspace:^",
     "@solana/web3.js": "^1.98.4",
     "buffer": "^6.0.3",
+    "clsx": "^2.1.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.30.1"
+    "react-router-dom": "^6.30.1",
+    "tailwind-merge": "^2.5.5"
   },
   "devDependencies": {
     "@types/react": "^18.3.17",

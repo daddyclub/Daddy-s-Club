@@ -2,7 +2,6 @@ node_modules/
 dist/
 build/
 target/
-.turbo/
 
 .env
 .env.*

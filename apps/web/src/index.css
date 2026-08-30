@@ -1,0 +1,119 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------
+   Daddy's Club — mechanical departures board.
+   All colour lives here as HSL tokens. Two colours beyond ink and
+   background: one ink-blue accent (live / positive) and one red
+   (overdue only).
+------------------------------------------------------------------- */
+
+@layer base {
+  :root {
+    --board-bg: 42 30% 95%;
+    --board-panel: 42 26% 92%;
+    --board-cell: 44 24% 89%;
+    --board-ink: 40 8% 9%;
+    --board-dim: 40 6% 40%;
+    --board-faint: 40 6% 58%;
+    --board-rule: 40 10% 78%;
+    --board-accent: 224 62% 36%;
+    --board-red: 4 66% 42%;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--board-rule));
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: hsl(var(--board-bg));
+    color: hsl(var(--board-ink));
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-ligatures: none;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  input,
+  button {
+    font-family: inherit;
+  }
+
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+}
+
+/* ---- split-flap mechanics ---- */
+
+@keyframes flap-out {
+  from {
+    transform: rotateX(0deg);
+  }
+  to {
+    transform: rotateX(-88deg);
+  }
+}
+
+@keyframes flap-in {
+  from {
+    transform: rotateX(88deg);
+  }
+  to {
+    transform: rotateX(0deg);
+  }
+}
+
+.flap-face {
+  display: block;
+  backface-visibility: hidden;
+  transform-origin: center center;
+}
+
+.flap-face-out {
+  animation: flap-out 80ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+.flap-face-in {
+  animation: flap-in 110ms cubic-bezier(0, 0, 0.2, 1) forwards;
+}
+
+@keyframes tape-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.tape-enter {
+  animation: tape-enter 220ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+@keyframes board-settle {
+  from {
+    transform: rotateX(90deg);
+    opacity: 0;
+  }
+  to {
+    transform: rotateX(0deg);
+    opacity: 1;
+  }
+}
+
+.board-settle {
+  animation: board-settle 420ms cubic-bezier(0, 0, 0.2, 1) both;
+}
