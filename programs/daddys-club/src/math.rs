@@ -1,7 +1,7 @@
 //! Арифметика погашення. Уся — checked_* у u128, округлення вниз.
 //!
 //! Дзеркалиться у packages/sdk/src/math.ts і покривається спільними фікстурами
-//! з fixtures/. Розбіжність між цими двома файлами має бути червоним тестом.
+//! з fixtures/math.json. Розбіжність між цими двома файлами має бути червоним тестом.
 //!
 //! Кожна функція повертає `None` замість того, щоб панікувати: переповнення,
 //! ділення на нуль і чекпоінт із майбутнього — це не «неможливо», а помилки,
@@ -280,5 +280,191 @@ mod tests {
             paid_out <= received,
             "виплачено {paid_out} при надходженнях {received}"
         );
+    }
+}
+
+#[cfg(test)]
+mod fixtures {
+    //! Той самий файл фікстур, що й у packages/sdk/src/math.test.ts.
+    //!
+    //! Сенс модуля не в тому, щоб продублювати юніт-тести вище, а в тому, щоб
+    //! обидві реалізації рахували ті самі числа: розбіжність math.rs ↔ math.ts
+    //! падає червоним з обох боків, і жоден бік не може «полагодити» її сам.
+    //!
+    //! `include_str!`, а не читання з диска: шлях перевіряється на компіляції, і
+    //! cargo сам перезбирає тест, коли фікстури змінились.
+
+    use super::*;
+    use serde_json::Value;
+
+    const RAW: &str = include_str!("../../../fixtures/math.json");
+
+    /// Групи, які цей бік уміє прогнати. Нова група у файлі має впасти, а не
+    /// мовчки лишитись без Rust-боку.
+    const GROUPS: [&str; 5] = [
+        "obligationTotal",
+        "pledgedShare",
+        "splitIntercept",
+        "advanceIndex",
+        "claimable",
+    ];
+
+    fn doc() -> Value {
+        serde_json::from_str(RAW).expect("fixtures/math.json не є валідним JSON")
+    }
+
+    /// Порожня група — це не «нема що перевіряти», а мовчазна втрата покриття.
+    fn cases<'a>(doc: &'a Value, group: &str) -> &'a [Value] {
+        let list = doc
+            .get(group)
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("групи {group} немає у fixtures/math.json"));
+        assert!(
+            !list.is_empty(),
+            "група {group} порожня — фікстури нічого не доводять"
+        );
+        list
+    }
+
+    fn name(case: &Value) -> &str {
+        case.get("name").and_then(Value::as_str).unwrap_or("<без імені>")
+    }
+
+    /// u128 приходить десятковим рядком: у JSON-число він не влазить.
+    fn u128_at(case: &Value, key: &str) -> u128 {
+        let raw = case
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("{key} має бути десятковим рядком, а не {case}"));
+        raw.parse()
+            .unwrap_or_else(|e| panic!("{key} = {raw} не парситься як u128: {e}"))
+    }
+
+    fn bps_at(case: &Value, key: &str) -> u16 {
+        let raw = case
+            .get(key)
+            .and_then(Value::as_u64)
+            .unwrap_or_else(|| panic!("{key} має бути числом, а не {case}"));
+        u16::try_from(raw).unwrap_or_else(|_| panic!("{key} = {raw} не вкладається в u16"))
+    }
+
+    /// `null` у фікстурах — це `None` тут.
+    fn outcome(case: &Value) -> Option<u128> {
+        match case.get("expected") {
+            Some(Value::Null) => None,
+            Some(_) => Some(u128_at(case, "expected")),
+            None => panic!("у випадку немає поля expected: {case}"),
+        }
+    }
+
+    #[test]
+    fn every_group_in_the_file_is_actually_run() {
+        let doc = doc();
+        let object = doc.as_object().expect("fixtures/math.json має бути об'єктом");
+        for (key, value) in object {
+            assert!(
+                !value.is_array() || GROUPS.contains(&key.as_str()),
+                "група {key} є у фікстурах, але Rust-бік її не ганяє"
+            );
+        }
+        for group in GROUPS {
+            cases(&doc, group);
+        }
+    }
+
+    #[test]
+    fn constants_match_the_fixtures() {
+        let doc = doc();
+        assert_eq!(u128_at(&doc, "scale"), SCALE);
+        assert_eq!(u128_at(&doc, "bpsDenom"), BPS_DENOM);
+    }
+
+    #[test]
+    fn obligation_total_matches_the_fixtures() {
+        let doc = doc();
+        for case in cases(&doc, "obligationTotal") {
+            let got = obligation_total(u128_at(case, "face"), bps_at(case, "couponBps"));
+            assert_eq!(got, outcome(case), "{}", name(case));
+        }
+    }
+
+    #[test]
+    fn pledged_share_matches_the_fixtures() {
+        let doc = doc();
+        for case in cases(&doc, "pledgedShare") {
+            let got = pledged_share(u128_at(case, "amount"), bps_at(case, "pledgeBps"));
+            assert_eq!(got, outcome(case), "{}", name(case));
+        }
+    }
+
+    #[test]
+    fn split_intercept_matches_the_fixtures() {
+        let doc = doc();
+        for case in cases(&doc, "splitIntercept") {
+            let got = split_intercept(
+                u128_at(case, "amount"),
+                bps_at(case, "pledgeBps"),
+                u128_at(case, "remaining"),
+            );
+            let expected = match case.get("expected") {
+                Some(Value::Null) => None,
+                Some(want) => Some(Split {
+                    to_escrow: u128_at(want, "toEscrow"),
+                    to_issuer: u128_at(want, "toIssuer"),
+                }),
+                None => panic!("у випадку немає поля expected: {case}"),
+            };
+            assert_eq!(got, expected, "{}", name(case));
+        }
+    }
+
+    #[test]
+    fn split_intercept_fixtures_conserve_the_amount() {
+        let doc = doc();
+        for case in cases(&doc, "splitIntercept") {
+            let amount = u128_at(case, "amount");
+            let remaining = u128_at(case, "remaining");
+            let Some(split) = split_intercept(amount, bps_at(case, "pledgeBps"), remaining) else {
+                continue;
+            };
+            assert_eq!(
+                split.to_escrow + split.to_issuer,
+                amount,
+                "{}: надходження не зберіглося",
+                name(case)
+            );
+            assert!(
+                split.to_escrow <= remaining,
+                "{}: пробита стеля залишку зобов'язання",
+                name(case)
+            );
+        }
+    }
+
+    #[test]
+    fn advance_index_matches_the_fixtures() {
+        let doc = doc();
+        for case in cases(&doc, "advanceIndex") {
+            let got = advance_index(
+                u128_at(case, "index"),
+                u128_at(case, "amount"),
+                u128_at(case, "bondSupply"),
+            );
+            assert_eq!(got, outcome(case), "{}", name(case));
+        }
+    }
+
+    #[test]
+    fn claimable_matches_the_fixtures() {
+        let doc = doc();
+        for case in cases(&doc, "claimable") {
+            let got = claimable(
+                u128_at(case, "index"),
+                u128_at(case, "checkpoint"),
+                u128_at(case, "balance"),
+                u128_at(case, "accrued"),
+            );
+            assert_eq!(got, outcome(case), "{}", name(case));
+        }
     }
 }
