@@ -36,6 +36,11 @@ mollusk-svm-programs-token = { version = "0.15.0", default-features = false, fea
 ] }
 # Версії підібрані під mollusk 0.15: він приймає Instruction саме з цих крейтів.
 solana-account = "4.3.2"
+# ⚠️ 2.6.1 — пін, і тримає його Cargo.lock, бо "2.6.1" тут дозволяє 2.7.0.
+# solana-address 2.7.0 тягне wincode 0.6.1, коли решта графа сидить на 0.5.5:
+# E0277 «SchemaWrite не реалізовано для Pubkey» на чужому крейті. Полагодженої
+# версії немає. Після будь-якого cargo update перевіряти, що у Cargo.lock рівно
+# одна версія wincode.
 solana-address = "2.6.1"
 solana-instruction = "3.4.1"
 solana-instruction-error = "2.4.0"
