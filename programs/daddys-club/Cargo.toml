@@ -31,9 +31,23 @@ spl-discriminator = { workspace = true }
 # litesvm на Anchor 0.32.1 не збирається (E0027 на touched_flags) —
 # див. docs/PLAN.md, Complexity Tracking.
 mollusk-svm = "0.15.0"
+# Бонд — Token-2022 із гуком, тому в тесті піднімається саме він. Ознака
+# extensions цього крейта НЕ вмикається: вона тягне spl-token-2022-interface,
+# а той — spl-list-view 0.1.0, який не збирається (див. корінний Cargo.toml).
+# Акаунти з розширеннями харнес складає на spl-token-2022, що вже є в графі
+# через anchor-spl.
 mollusk-svm-programs-token = { version = "0.15.0", default-features = false, features = [
   "token",
+  "token-2022",
 ] }
+# Референсний емітент піднімається в тому ж харнесі: FR-004 автентифікує
+# перехоплення підписом його PDA, і без справжнього байткоду цей шлях не
+# перевірити. Залежність циклічна (demo-issuer залежить від цього крейта), але
+# лише в dev — cargo такий цикл дозволяє, а SBF-збірка dev-залежностей не бачить.
+demo-issuer = { path = "../demo-issuer" }
+# Акаунти, які харнес складає руками, мусять бути rent-exempt так само, як ті,
+# що їх складає mollusk.
+solana-rent = "4.3.0"
 # Версії підібрані під mollusk 0.15: він приймає Instruction саме з цих крейтів.
 solana-account = "4.3.2"
 # ⚠️ 2.6.1 — пін, і тримає його Cargo.lock, бо "2.6.1" тут дозволяє 2.7.0.
