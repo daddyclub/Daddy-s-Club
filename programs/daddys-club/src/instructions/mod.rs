@@ -6,5 +6,6 @@
 //! розносити половини по різних файлах — найдешевший спосіб їх розсинхронити.
 
 pub mod protocol;
+pub mod source;
 
-pub use protocol::*;
+pub use {protocol::*, source::*};

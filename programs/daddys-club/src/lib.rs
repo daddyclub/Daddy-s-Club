@@ -24,4 +24,10 @@ pub mod daddys_club {
     pub fn update_config(ctx: Context<UpdateConfig>, params: ConfigParams) -> Result<()> {
         instructions::protocol::update_config(ctx, params)
     }
+
+    /// Підключає джерело revenue: з цієї миті воно накопичує історію
+    /// (`FR-028`), а `intercept` знає, чий підпис приймати (`FR-004`).
+    pub fn register_source(ctx: Context<RegisterSource>, seq: u64) -> Result<()> {
+        instructions::source::register_source(ctx, seq)
+    }
 }
