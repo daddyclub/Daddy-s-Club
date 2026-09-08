@@ -5,8 +5,9 @@
 //! стережуть Anchor-обмеження, тому набір акаунтів і є половиною правила, а
 //! розносити половини по різних файлах — найдешевший спосіб їх розсинхронити.
 
+pub mod invest;
 pub mod issue;
 pub mod protocol;
 pub mod source;
 
-pub use {issue::*, protocol::*, source::*};
+pub use {invest::*, issue::*, protocol::*, source::*};

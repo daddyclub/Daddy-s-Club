@@ -37,4 +37,11 @@ pub mod daddys_club {
     pub fn create_issue(ctx: Context<CreateIssue>, seq: u64, params: IssueParams) -> Result<()> {
         instructions::issue::create_issue(ctx, seq, params)
     }
+
+    /// Відкриває облік за випуском. Саме існування цього акаунта й означає, що
+    /// гаманцеві можна передати бонд: список акаунтів гука резолвить його при
+    /// кожному переказі, і без нього передача відхиляється цілком (`FR-038`).
+    pub fn open_position(ctx: Context<OpenPosition>) -> Result<()> {
+        instructions::invest::open_position(ctx)
+    }
 }
