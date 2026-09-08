@@ -17,12 +17,14 @@ import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 import {
   CONFIG_SEED,
+  EXTRA_METAS_SEED,
   HOLDER_SEED,
   ISSUE_SEED,
   OFFER_SEED,
   PROGRAM_ID,
   SOURCE_SEED,
   configPda,
+  extraAccountMetasPda,
   holderPda,
   issuePda,
   offerPda,
@@ -32,6 +34,10 @@ import {
 const stateRs = readFileSync(new URL('../../../programs/daddys-club/src/state.rs', import.meta.url), 'utf8');
 const harnessRs = readFileSync(new URL('../../../programs/daddys-club/tests/harness.rs', import.meta.url), 'utf8');
 const libRs = readFileSync(new URL('../../../programs/daddys-club/src/lib.rs', import.meta.url), 'utf8');
+const issueRs = readFileSync(
+  new URL('../../../programs/daddys-club/src/instructions/issue.rs', import.meta.url),
+  'utf8',
+);
 
 const utf8 = new TextDecoder();
 
@@ -39,6 +45,7 @@ const utf8 = new TextDecoder();
 const key = (fill: number): PublicKey => new PublicKey(new Uint8Array(32).fill(fill));
 const ISSUER = key(12);
 const INVESTOR = key(13);
+const BOND_MINT = key(23);
 
 function must<T>(value: T | undefined, what: string): T {
   if (value === undefined) {
@@ -87,6 +94,14 @@ describe('seeds збігаються зі state.rs', () => {
     expect(utf8.decode(bytes)).toBe(seedBytesFromState(name));
   });
 
+  it('EXTRA_METAS_SEED збігається з issue.rs', () => {
+    // Цей seed живе не в `state.rs`, бо він не наш: за ним Token-2022 шукає
+    // список сам. Що байти в програмі ті самі, що й у Token-2022, доводить
+    // `the_metas_seed_is_the_one_token_2022_looks_for` у самій програмі.
+    const found = /pub const EXTRA_METAS_SEED: &\[u8\] = b"([^"]+)";/.exec(issueRs);
+    expect(utf8.decode(EXTRA_METAS_SEED)).toBe(must(found?.[1], 'EXTRA_METAS_SEED у issue.rs'));
+  });
+
   it('інших seed-констант у програмі немає', () => {
     // Seed, доданий у state.rs без деривації тут, — це акаунт, який клієнт не
     // вміє знайти. Хай про нього скаже тест, а не порожній екран.
@@ -103,6 +118,7 @@ describe('порядок seeds збігається з харнесом', () => 
     ['source_pda', ['SOURCE_SEED', 'issuer.as_ref()', '&seq.to_le_bytes()']],
     ['issue_pda', ['ISSUE_SEED', 'source.as_ref()', '&seq.to_le_bytes()']],
     ['holder_pda', ['HOLDER_SEED', 'issue.as_ref()', 'owner.as_ref()']],
+    ['extra_metas_pda', ['EXTRA_METAS_SEED', 'mint.as_ref()']],
     ['offer_pda', ['OFFER_SEED', 'issue.as_ref()', 'seller.as_ref()', '&nonce.to_le_bytes()']],
   ])('%s', (fn, expected) => {
     expect(harnessSeeds(fn)).toEqual(expected);
@@ -126,6 +142,7 @@ describe('деривації', () => {
       sourcePda(ISSUER, 7n),
       issuePda(source, 3n),
       holderPda(issue, INVESTOR),
+      extraAccountMetasPda(BOND_MINT),
       offerPda(issue, INVESTOR, 5n),
     ]) {
       expect(PublicKey.isOnCurve(derived.address.toBytes())).toBe(false);

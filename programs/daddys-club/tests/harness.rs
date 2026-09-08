@@ -33,7 +33,10 @@ use {
         },
         state::{Account as HookTokenAccount, AccountState as HookAccountState, Mint as HookMint},
     },
-    daddys_club::state::{CONFIG_SEED, HOLDER_SEED, ISSUE_SEED, OFFER_SEED, SOURCE_SEED},
+    daddys_club::{
+        instructions::{issue::EXTRA_METAS_SEED, protocol::ConfigParams},
+        state::{ProtocolConfig, CONFIG_SEED, HOLDER_SEED, ISSUE_SEED, OFFER_SEED, SOURCE_SEED},
+    },
     mollusk_svm::{
         program::{keyed_account_for_system_program, loader_keys},
         result::InstructionResult,
@@ -123,6 +126,12 @@ pub fn holder_pda(issue: Pubkey, owner: Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[HOLDER_SEED, issue.as_ref(), owner.as_ref()], &club_id())
 }
 
+/// Список додаткових акаунтів гука. Seed береться з програми: він там уже
+/// звірений із тим, що шукає Token-2022.
+pub fn extra_metas_pda(mint: Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[EXTRA_METAS_SEED, mint.as_ref()], &club_id())
+}
+
 pub fn offer_pda(issue: Pubkey, seller: Pubkey, nonce: u64) -> (Pubkey, u8) {
     Pubkey::find_program_address(
         &[
@@ -183,6 +192,39 @@ pub fn log_lines(logs: &Rc<RefCell<LogCollector>>) -> Vec<String> {
 }
 
 // ---- Акаунти ---------------------------------------------------------------
+
+/// Набір, яким протокол реально запускається в демо: origination fee посеред
+/// дозволеного діапазону, стеля перехоплення 30%, повний діапазон строків і
+/// короткий поріг історії (`SPEC.md` → Припущення).
+pub fn demo_config_params() -> ConfigParams {
+    ConfigParams {
+        origination_fee_bps: 150,
+        trading_fee_bps: 50,
+        max_pledge_bps: 3_000,
+        min_tenor_secs: 30 * DAY,
+        max_tenor_secs: 180 * DAY,
+        history_threshold_secs: 7 * DAY,
+    }
+}
+
+/// Конфіг у тому вигляді, в якому його лишає `init_protocol` на цих параметрах.
+/// Кожна інструкція, що читає конфіг, починається з нього.
+pub fn stored_config() -> ProtocolConfig {
+    let params = demo_config_params();
+
+    ProtocolConfig {
+        admin: anchor_key(ADMIN),
+        origination_fee_bps: params.origination_fee_bps,
+        trading_fee_bps: params.trading_fee_bps,
+        max_pledge_bps: params.max_pledge_bps,
+        min_tenor_secs: params.min_tenor_secs,
+        max_tenor_secs: params.max_tenor_secs,
+        history_threshold_secs: params.history_threshold_secs,
+        usdc_mint: anchor_key(USDC_MINT),
+        fee_vault: anchor_key(FEE_VAULT),
+        bump: config_pda().1,
+    }
+}
 
 /// Гаманець із лампортами під оренду створюваних акаунтів.
 pub fn wallet() -> Account {
@@ -370,7 +412,7 @@ pub fn replacing(
 mod tests {
     use {
         super::*,
-        daddys_club::state::{Issue, IssueState, ProtocolConfig},
+        daddys_club::state::{Issue, IssueState},
         solana_instruction::{AccountMeta, Instruction},
     };
 
@@ -452,6 +494,13 @@ mod tests {
             holder_pda(issue, INVESTOR),
             Pubkey::find_program_address(
                 &[b"holder", issue.as_ref(), INVESTOR.as_ref()],
+                &club_id()
+            )
+        );
+        assert_eq!(
+            extra_metas_pda(BOND_MINT),
+            Pubkey::find_program_address(
+                &[b"extra-account-metas", BOND_MINT.as_ref()],
                 &club_id()
             )
         );

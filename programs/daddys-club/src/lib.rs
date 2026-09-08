@@ -30,4 +30,11 @@ pub mod daddys_club {
     pub fn register_source(ctx: Context<RegisterSource>, seq: u64) -> Result<()> {
         instructions::source::register_source(ctx, seq)
     }
+
+    /// Створює випуск під зареєстроване джерело: фіксує умови назавжди
+    /// (`FR-001`, `FR-002`), займає джерело (`FR-006`) і випускає власний мінт
+    /// бонду з незмінним гуком (`FR-013`).
+    pub fn create_issue(ctx: Context<CreateIssue>, seq: u64, params: IssueParams) -> Result<()> {
+        instructions::issue::create_issue(ctx, seq, params)
+    }
 }

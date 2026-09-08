@@ -29,6 +29,13 @@ export const ISSUE_SEED = utf8.encode('issue');
 export const HOLDER_SEED = utf8.encode('holder');
 /** `state.rs` → `OFFER_SEED`. */
 export const OFFER_SEED = utf8.encode('offer');
+/**
+ * Список додаткових акаунтів гука. Seed належить не протоколу, а
+ * `spl-transfer-hook-interface`: за ним Token-2022 шукає список сам. Тому в
+ * `state.rs` його немає, і звіряється він із
+ * `programs/daddys-club/src/instructions/issue.rs`.
+ */
+export const EXTRA_METAS_SEED = utf8.encode('extra-account-metas');
 
 const U64_MAX = (1n << 64n) - 1n;
 
@@ -82,6 +89,18 @@ export function issuePda(source: PublicKey, seq: bigint, programId: PublicKey = 
  */
 export function holderPda(issue: PublicKey, owner: PublicKey, programId: PublicKey = PROGRAM_ID): Derived {
   return derive([HOLDER_SEED, issue.toBytes(), owner.toBytes()], programId);
+}
+
+/**
+ * Список додаткових акаунтів гука. Seeds `["extra-account-metas", bondMint]`.
+ *
+ * Дерівається від мінта, а не від випуску: шукає його Token-2022, а в наборі
+ * акаунтів переказу з нашого світу є лише мінт. Клієнту він потрібен, щоб
+ * зібрати переказ бонду — акаунти в нього дописуються з цього списку
+ * (`FR-017`).
+ */
+export function extraAccountMetasPda(bondMint: PublicKey, programId: PublicKey = PROGRAM_ID): Derived {
+  return derive([EXTRA_METAS_SEED, bondMint.toBytes()], programId);
 }
 
 /** Оферта вторинного ринку. Seeds `["offer", issue, seller, nonce]` (`FR-024`). */

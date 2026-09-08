@@ -10,7 +10,7 @@ mod harness;
 
 use {
     anchor_lang::InstructionData,
-    daddys_club::state::{ProtocolConfig, RevenueSource},
+    daddys_club::state::RevenueSource,
     harness::*,
     mollusk_svm::result::Check,
     solana_account::Account,
@@ -26,23 +26,6 @@ const AUTHORITY: Pubkey = Pubkey::new_from_array([31u8; 32]);
 const SOURCE_VAULT: Pubkey = Pubkey::new_from_array([32u8; 32]);
 
 const SEQ: u64 = 0;
-
-/// Конфіг, який на цій інструкції читається рівно заради `usdc_mint`: решта
-/// параметрів працює на створенні випуску, не на реєстрації джерела.
-fn stored_config() -> ProtocolConfig {
-    ProtocolConfig {
-        admin: anchor_key(ADMIN),
-        origination_fee_bps: 150,
-        trading_fee_bps: 50,
-        max_pledge_bps: 3_000,
-        min_tenor_secs: 30 * DAY,
-        max_tenor_secs: 180 * DAY,
-        history_threshold_secs: 7 * DAY,
-        usdc_mint: anchor_key(USDC_MINT),
-        fee_vault: anchor_key(FEE_VAULT),
-        bump: config_pda().1,
-    }
-}
 
 fn register_ix(issuer: Pubkey, seq: u64) -> Instruction {
     Instruction::new_with_bytes(

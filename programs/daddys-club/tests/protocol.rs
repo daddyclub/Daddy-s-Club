@@ -22,34 +22,16 @@ use {
     solana_program_error::ProgramError,
 };
 
-/// Набір, яким протокол реально запускається в демо: origination fee посеред
-/// дозволеного діапазону, стеля перехоплення 30%, повний діапазон строків і
-/// короткий поріг історії (`SPEC.md` → Припущення).
 fn valid_params() -> ConfigParams {
-    ConfigParams {
-        origination_fee_bps: 150,
-        trading_fee_bps: 50,
-        max_pledge_bps: 3_000,
-        min_tenor_secs: 30 * DAY,
-        max_tenor_secs: 180 * DAY,
-        history_threshold_secs: 7 * DAY,
-    }
+    demo_config_params()
 }
 
-fn stored_config(admin: Pubkey) -> ProtocolConfig {
-    let params = valid_params();
-
+/// Той самий конфіг, що й у решти тестів, але на довільному адміністраторі:
+/// `update_config` тільки й перевіряє, чий підпис прийшов.
+fn config_of(admin: Pubkey) -> ProtocolConfig {
     ProtocolConfig {
         admin: anchor_key(admin),
-        origination_fee_bps: params.origination_fee_bps,
-        trading_fee_bps: params.trading_fee_bps,
-        max_pledge_bps: params.max_pledge_bps,
-        min_tenor_secs: params.min_tenor_secs,
-        max_tenor_secs: params.max_tenor_secs,
-        history_threshold_secs: params.history_threshold_secs,
-        usdc_mint: anchor_key(USDC_MINT),
-        fee_vault: anchor_key(FEE_VAULT),
-        bump: config_pda().1,
+        ..stored_config()
     }
 }
 
@@ -90,7 +72,7 @@ fn update_ix(admin: Pubkey, params: ConfigParams) -> Instruction {
 
 fn update_accounts(admin: Pubkey) -> Vec<(Pubkey, Account)> {
     vec![
-        (config_pda().0, anchor_account(&stored_config(ADMIN))),
+        (config_pda().0, anchor_account(&config_of(ADMIN))),
         (admin, wallet()),
     ]
 }
@@ -136,7 +118,7 @@ fn init_protocol_refuses_to_create_the_config_twice() {
     let occupied = replacing(
         &init_accounts(),
         config_pda().0,
-        anchor_account(&stored_config(ADMIN)),
+        anchor_account(&config_of(ADMIN)),
     );
 
     let result = mollusk.process_instruction(&init_ix(valid_params()), &occupied);
