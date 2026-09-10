@@ -99,6 +99,9 @@ pub enum ClubError {
     #[msg("Issue has not been fully funded")]
     IssueNotFunded,
 
+    /// `FR-012`: номінал стає доступним емітенту рівно один раз. Окремого
+    /// прапорця у випуску немає — записом про видачу є перехід у `Repaying`,
+    /// тому саме стан і відрізняє «уже забрано» від «ще не зібрано».
     #[msg("Proceeds have already been withdrawn")]
     ProceedsAlreadyWithdrawn,
 

@@ -35,7 +35,10 @@ use {
     },
     daddys_club::{
         instructions::{issue::EXTRA_METAS_SEED, protocol::ConfigParams},
-        state::{ProtocolConfig, CONFIG_SEED, HOLDER_SEED, ISSUE_SEED, OFFER_SEED, SOURCE_SEED},
+        state::{
+            Issue, IssueState, ProtocolConfig, CONFIG_SEED, HOLDER_SEED, ISSUE_SEED, OFFER_SEED,
+            SOURCE_SEED,
+        },
     },
     mollusk_svm::{
         program::{keyed_account_for_system_program, loader_keys},
@@ -76,6 +79,16 @@ pub const OUTSIDER: Pubkey = Pubkey::new_from_array([15u8; 32]);
 pub const USDC_MINT: Pubkey = Pubkey::new_from_array([21u8; 32]);
 pub const FEE_VAULT: Pubkey = Pubkey::new_from_array([22u8; 32]);
 pub const BOND_MINT: Pubkey = Pubkey::new_from_array([23u8; 32]);
+
+/// Два сховища випуску, обидва в USDC і обидва на authority випуску. Ключі
+/// довільні, бо дерівацією не задані: знайти їх можна лише з самого `Issue`.
+/// Тому вони й лежать поруч — переплутати їх найлегше саме тут.
+pub const SUBSCRIPTION_VAULT: Pubkey = Pubkey::new_from_array([33u8; 32]);
+pub const ESCROW_VAULT: Pubkey = Pubkey::new_from_array([34u8; 32]);
+
+/// Нумерація демо-світу: у `ISSUER` одне джерело, під ним один випуск.
+pub const SOURCE_SEQ: u64 = 0;
+pub const ISSUE_SEQ: u64 = 0;
 
 /// Програма ядра.
 pub fn club_id() -> Pubkey {
@@ -223,6 +236,47 @@ pub fn stored_config() -> ProtocolConfig {
         usdc_mint: anchor_key(USDC_MINT),
         fee_vault: anchor_key(FEE_VAULT),
         bump: config_pda().1,
+    }
+}
+
+/// Джерело і випуск демо-світу. Функції, а не константи: адреси дерівуються.
+pub fn demo_source() -> Pubkey {
+    source_pda(ISSUER, SOURCE_SEQ).0
+}
+
+pub fn demo_issue() -> Pubkey {
+    issue_pda(demo_source(), ISSUE_SEQ).0
+}
+
+/// Випуск у тому вигляді, в якому його лишає `create_issue` на умовах картки
+/// M0 (250 000 USDC під 9.5% на 90 днів, 12% перехоплення, лот 1 USDC), плюс
+/// рух погашення, який задає тест.
+///
+/// Живе тут, а не в тестовому файлі, з третього споживача: `open_position` і
+/// `subscribe` беруть його з `tests/invest.rs`, `withdraw_proceeds` — з
+/// `tests/issue.rs`, і три копії одного випуску розійшлися б у той бік, який
+/// ніхто не ганяє. Що опис не розійшовся з інструкцією, стереже
+/// `create_issue_freezes_the_terms_the_issuer_asked_for` — він міряє те саме
+/// поле за полем на справжньому створенні.
+pub fn stored_issue(state: IssueState, payout_index: u128) -> Issue {
+    Issue {
+        source: anchor_key(demo_source()),
+        bond_mint: anchor_key(BOND_MINT),
+        escrow_vault: anchor_key(ESCROW_VAULT),
+        subscription_vault: anchor_key(SUBSCRIPTION_VAULT),
+        face: 250_000_000_000,
+        coupon_bps: 950,
+        pledge_bps: 1_200,
+        maturity_ts: NOW + 90 * DAY,
+        subscription_end_ts: NOW + 7 * DAY,
+        min_lot: 1_000_000,
+        raised: 0,
+        obligation_total: 273_750_000_000,
+        repaid_total: 0,
+        payout_index,
+        state,
+        seq: ISSUE_SEQ,
+        bump: issue_pda(demo_source(), ISSUE_SEQ).1,
     }
 }
 
@@ -374,7 +428,9 @@ pub fn bond_account(owner: Pubkey, amount: u64) -> Account {
 /// Баланс токен-акаунта з результату — однаково для USDC і для бонду:
 /// `StateWithExtensions` читає й рахунок без розширень.
 pub fn token_balance(result: &InstructionResult, key: &Pubkey) -> u64 {
-    let stored = result.get_account(key).expect("токен-акаунт є в результаті");
+    let stored = result
+        .get_account(key)
+        .expect("токен-акаунт є в результаті");
 
     StateWithExtensions::<HookTokenAccount>::unpack(&stored.data)
         .expect("токен-акаунт розпаковується")
@@ -412,7 +468,6 @@ pub fn replacing(
 mod tests {
     use {
         super::*,
-        daddys_club::state::{Issue, IssueState},
         solana_instruction::{AccountMeta, Instruction},
     };
 
@@ -499,10 +554,7 @@ mod tests {
         );
         assert_eq!(
             extra_metas_pda(BOND_MINT),
-            Pubkey::find_program_address(
-                &[b"extra-account-metas", BOND_MINT.as_ref()],
-                &club_id()
-            )
+            Pubkey::find_program_address(&[b"extra-account-metas", BOND_MINT.as_ref()], &club_id())
         );
         assert_eq!(
             offer_pda(issue, INVESTOR, 5),

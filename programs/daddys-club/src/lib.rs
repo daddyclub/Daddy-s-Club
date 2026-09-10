@@ -52,4 +52,12 @@ pub mod daddys_club {
     pub fn subscribe(ctx: Context<Subscribe>, amount: u64) -> Result<()> {
         instructions::invest::subscribe(ctx, amount)
     }
+
+    /// Видає емітенту зібраний номінал за вирахуванням origination fee
+    /// (`FR-012`, `FR-034`). Гроші беруться зі сховища підписки, комісія йде у
+    /// скарбницю протоколу, а випуск виходить звідси в `Repaying`: з цієї миті
+    /// зобов'язання існує, і перехоплення має сенс.
+    pub fn withdraw_proceeds(ctx: Context<WithdrawProceeds>) -> Result<()> {
+        instructions::issue::withdraw_proceeds(ctx)
+    }
 }

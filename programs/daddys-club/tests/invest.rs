@@ -41,53 +41,17 @@ use {
     solana_program_error::ProgramError,
 };
 
-const SOURCE_SEQ: u64 = 0;
-const SEQ: u64 = 0;
-
-/// Сховища випуску — ключі довільні, бо дерівацією не задані (сесія 7); тут
-/// вони лише заповнюють поля `Issue`.
-const SUBSCRIPTION_VAULT: Pubkey = Pubkey::new_from_array([33u8; 32]);
-const ESCROW_VAULT: Pubkey = Pubkey::new_from_array([34u8; 32]);
-
 /// Індекс виплати, вже накопичений випуском. Ненульовий навмисно: чекпоінт у
 /// нулі інакше не відрізнити від чекпоінта, знятого з індексу.
 const INDEX_SO_FAR: u128 = 4_500_000_000_000;
-
-fn issue_key() -> Pubkey {
-    issue_pda(source_pda(ISSUER, SOURCE_SEQ).0, SEQ).0
-}
-
-/// Випуск у тому вигляді, в якому його лишає `create_issue`, плюс рух
-/// погашення, який задає тест.
-fn stored_issue(state: IssueState, payout_index: u128) -> Issue {
-    Issue {
-        source: anchor_key(source_pda(ISSUER, SOURCE_SEQ).0),
-        bond_mint: anchor_key(BOND_MINT),
-        escrow_vault: anchor_key(ESCROW_VAULT),
-        subscription_vault: anchor_key(SUBSCRIPTION_VAULT),
-        face: 250_000_000_000,
-        coupon_bps: 950,
-        pledge_bps: 1_200,
-        maturity_ts: NOW + 90 * DAY,
-        subscription_end_ts: NOW + 7 * DAY,
-        min_lot: 1_000_000,
-        raised: 0,
-        obligation_total: 273_750_000_000,
-        repaid_total: 0,
-        payout_index,
-        state,
-        seq: SEQ,
-        bump: issue_pda(source_pda(ISSUER, SOURCE_SEQ).0, SEQ).1,
-    }
-}
 
 fn open_ix(payer: Pubkey, owner: Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         club_id(),
         &daddys_club::instruction::OpenPosition {}.data(),
         vec![
-            AccountMeta::new_readonly(issue_key(), false),
-            AccountMeta::new(holder_pda(issue_key(), owner).0, false),
+            AccountMeta::new_readonly(demo_issue(), false),
+            AccountMeta::new(holder_pda(demo_issue(), owner).0, false),
             AccountMeta::new(payer, true),
             AccountMeta::new_readonly(owner, false),
             AccountMeta::new_readonly(system_program().0, false),
@@ -97,8 +61,8 @@ fn open_ix(payer: Pubkey, owner: Pubkey) -> Instruction {
 
 fn open_accounts(payer: Pubkey, owner: Pubkey, issue: Issue) -> Vec<(Pubkey, Account)> {
     vec![
-        (issue_key(), anchor_account(&issue)),
-        (holder_pda(issue_key(), owner).0, uninitialized()),
+        (demo_issue(), anchor_account(&issue)),
+        (holder_pda(demo_issue(), owner).0, uninitialized()),
         (payer, wallet()),
         (owner, wallet()),
         system_program(),
@@ -130,7 +94,7 @@ fn open(payer: Pubkey, owner: Pubkey) -> InstructionResult {
 /// чекпоінта береться зі списку в мінті, а не з наших seed-байтів. Розкладка
 /// набору — `issue.rs`: акаунт 2 — рахунок отримувача, акаунт 5 — випуск.
 fn hook_resolves_holder_of(owner: Pubkey) -> Pubkey {
-    let issue = anchor_key(issue_key());
+    let issue = anchor_key(demo_issue());
     let mint = anchor_key(BOND_MINT);
 
     // Токен-акаунт: `mint` (32 байти), далі `owner`. Решта для резолву не
@@ -164,7 +128,7 @@ fn the_hook_resolves_to_the_ledger_this_instruction_creates() {
 
     assert_eq!(
         created,
-        holder_pda(issue_key(), INVESTOR).0,
+        holder_pda(demo_issue(), INVESTOR).0,
         "гук веде не туди, куди дерівує протокол"
     );
     assert!(
@@ -178,11 +142,11 @@ fn the_hook_resolves_to_the_ledger_this_instruction_creates() {
 #[test]
 fn open_position_records_whose_ledger_it_is_and_on_which_issue() {
     let result = open(INVESTOR, INVESTOR);
-    let holder: HolderCheckpoint = decode(&result, &holder_pda(issue_key(), INVESTOR).0);
+    let holder: HolderCheckpoint = decode(&result, &holder_pda(demo_issue(), INVESTOR).0);
 
-    assert_eq!(holder.issue, anchor_key(issue_key()));
+    assert_eq!(holder.issue, anchor_key(demo_issue()));
     assert_eq!(holder.owner, anchor_key(INVESTOR));
-    assert_eq!(holder.bump, holder_pda(issue_key(), INVESTOR).1);
+    assert_eq!(holder.bump, holder_pda(demo_issue(), INVESTOR).1);
 }
 
 /// `FR-016` рахує претензію різницею індексів. Чекпоінт у нулі віддав би
@@ -191,7 +155,7 @@ fn open_position_records_whose_ledger_it_is_and_on_which_issue() {
 #[test]
 fn a_fresh_ledger_starts_from_todays_index_and_owes_nothing() {
     let result = open(INVESTOR, INVESTOR);
-    let holder: HolderCheckpoint = decode(&result, &holder_pda(issue_key(), INVESTOR).0);
+    let holder: HolderCheckpoint = decode(&result, &holder_pda(demo_issue(), INVESTOR).0);
 
     assert_eq!(holder.index_at_checkpoint, INDEX_SO_FAR);
     assert_eq!(holder.accrued, 0);
@@ -213,7 +177,7 @@ fn anyone_may_open_a_ledger_for_a_wallet_that_did_not_sign() {
         &[Check::success()],
     );
 
-    let holder: HolderCheckpoint = decode(&result, &holder_pda(issue_key(), INVESTOR).0);
+    let holder: HolderCheckpoint = decode(&result, &holder_pda(demo_issue(), INVESTOR).0);
 
     assert_eq!(
         holder.owner,
@@ -229,18 +193,18 @@ fn the_ledger_of_one_wallet_is_not_the_ledger_of_another() {
     let theirs = open(BUYER, BUYER);
 
     assert_ne!(
-        holder_pda(issue_key(), INVESTOR).0,
-        holder_pda(issue_key(), BUYER).0
+        holder_pda(demo_issue(), INVESTOR).0,
+        holder_pda(demo_issue(), BUYER).0
     );
 
-    let mine: HolderCheckpoint = decode(&mine, &holder_pda(issue_key(), INVESTOR).0);
-    let theirs: HolderCheckpoint = decode(&theirs, &holder_pda(issue_key(), BUYER).0);
+    let mine: HolderCheckpoint = decode(&mine, &holder_pda(demo_issue(), INVESTOR).0);
+    let theirs: HolderCheckpoint = decode(&theirs, &holder_pda(demo_issue(), BUYER).0);
 
     assert_eq!(mine.owner, anchor_key(INVESTOR));
     assert_eq!(theirs.owner, anchor_key(BUYER));
     assert_eq!(
         hook_resolves_holder_of(BUYER),
-        holder_pda(issue_key(), BUYER).0
+        holder_pda(demo_issue(), BUYER).0
     );
 }
 
@@ -251,12 +215,12 @@ fn the_ledger_of_one_wallet_is_not_the_ledger_of_another() {
 #[test]
 fn open_position_refuses_to_reopen_a_ledger_that_already_exists() {
     let live = HolderCheckpoint {
-        issue: anchor_key(issue_key()),
+        issue: anchor_key(demo_issue()),
         owner: anchor_key(INVESTOR),
         index_at_checkpoint: INDEX_SO_FAR,
         accrued: 7_000_000,
         claimed_total: 3_000_000,
-        bump: holder_pda(issue_key(), INVESTOR).1,
+        bump: holder_pda(demo_issue(), INVESTOR).1,
     };
 
     let accounts = replacing(
@@ -265,7 +229,7 @@ fn open_position_refuses_to_reopen_a_ledger_that_already_exists() {
             INVESTOR,
             stored_issue(IssueState::Repaying, INDEX_SO_FAR),
         ),
-        holder_pda(issue_key(), INVESTOR).0,
+        holder_pda(demo_issue(), INVESTOR).0,
         anchor_account(&live),
     );
 
@@ -277,7 +241,7 @@ fn open_position_refuses_to_reopen_a_ledger_that_already_exists() {
         result.program_result
     );
 
-    let untouched: HolderCheckpoint = decode(&result, &holder_pda(issue_key(), INVESTOR).0);
+    let untouched: HolderCheckpoint = decode(&result, &holder_pda(demo_issue(), INVESTOR).0);
     assert_eq!(untouched.accrued, live.accrued, "нараховане стерлось");
     assert_eq!(untouched.claimed_total, live.claimed_total);
 }
@@ -286,14 +250,14 @@ fn open_position_refuses_to_reopen_a_ledger_that_already_exists() {
 /// інший: набір не сходиться ще до тіла інструкції.
 #[test]
 fn a_ledger_of_another_issue_does_not_fit_this_one() {
-    let other_issue = issue_pda(source_pda(ISSUER, SOURCE_SEQ).0, SEQ + 1).0;
+    let other_issue = issue_pda(demo_source(), ISSUE_SEQ + 1).0;
     let stray = holder_pda(other_issue, INVESTOR).0;
 
     let instruction = Instruction::new_with_bytes(
         club_id(),
         &daddys_club::instruction::OpenPosition {}.data(),
         vec![
-            AccountMeta::new_readonly(issue_key(), false),
+            AccountMeta::new_readonly(demo_issue(), false),
             AccountMeta::new(stray, false),
             AccountMeta::new(INVESTOR, true),
             AccountMeta::new_readonly(INVESTOR, false),
@@ -303,7 +267,7 @@ fn a_ledger_of_another_issue_does_not_fit_this_one() {
 
     let accounts = vec![
         (
-            issue_key(),
+            demo_issue(),
             anchor_account(&stored_issue(IssueState::Subscribing, INDEX_SO_FAR)),
         ),
         (stray, uninitialized()),
@@ -328,7 +292,7 @@ fn open_position_refuses_an_issue_that_does_not_exist() {
             INVESTOR,
             stored_issue(IssueState::Subscribing, INDEX_SO_FAR),
         ),
-        issue_key(),
+        demo_issue(),
         uninitialized(),
     );
 
@@ -352,7 +316,7 @@ fn a_repaid_issue_still_accepts_a_new_ledger() {
         &[Check::success()],
     );
 
-    let holder: HolderCheckpoint = decode(&result, &holder_pda(issue_key(), BUYER).0);
+    let holder: HolderCheckpoint = decode(&result, &holder_pda(demo_issue(), BUYER).0);
 
     assert_eq!(holder.index_at_checkpoint, INDEX_SO_FAR);
 }
@@ -364,7 +328,7 @@ fn a_repaid_issue_still_accepts_a_new_ledger() {
 fn the_ledger_account_is_exactly_the_size_the_clients_expect() {
     let result = open(INVESTOR, INVESTOR);
     let stored = result
-        .get_account(&holder_pda(issue_key(), INVESTOR).0)
+        .get_account(&holder_pda(demo_issue(), INVESTOR).0)
         .expect("чекпоінт є в результаті");
 
     assert_eq!(stored.data.len(), 8 + HolderCheckpoint::INIT_SPACE);
@@ -387,14 +351,14 @@ const LOTS: u64 = 5_000_000;
 
 fn stored_holder(owner: Pubkey) -> HolderCheckpoint {
     HolderCheckpoint {
-        issue: anchor_key(issue_key()),
+        issue: anchor_key(demo_issue()),
         owner: anchor_key(owner),
         // Поки випуск у `Subscribing`, індекс стоїть на нулі: рухає його лише
         // перехоплення, а воно працює в `Repaying`.
         index_at_checkpoint: 0,
         accrued: 0,
         claimed_total: 0,
-        bump: holder_pda(issue_key(), owner).1,
+        bump: holder_pda(demo_issue(), owner).1,
     }
 }
 
@@ -407,7 +371,11 @@ fn subscribing_with(raised: u64) -> Issue {
 }
 
 fn subscribe_ix(amount: u64) -> Instruction {
-    subscribe_ix_with(holder_pda(issue_key(), INVESTOR).0, SUBSCRIPTION_VAULT, amount)
+    subscribe_ix_with(
+        holder_pda(demo_issue(), INVESTOR).0,
+        SUBSCRIPTION_VAULT,
+        amount,
+    )
 }
 
 /// Той самий виклик із підміненим обліком або сховищем — так пишеться
@@ -418,7 +386,7 @@ fn subscribe_ix_with(holder: Pubkey, vault: Pubkey, amount: u64) -> Instruction 
         club_id(),
         &daddys_club::instruction::Subscribe { amount }.data(),
         vec![
-            AccountMeta::new(issue_key(), false),
+            AccountMeta::new(demo_issue(), false),
             AccountMeta::new_readonly(holder, false),
             AccountMeta::new_readonly(INVESTOR, true),
             AccountMeta::new(INVESTOR_USDC, false),
@@ -436,15 +404,15 @@ fn subscribe_ix_with(holder: Pubkey, vault: Pubkey, amount: u64) -> Instruction 
 /// — усе зібране до нього приніс хтось інший.
 fn subscribe_accounts(issue: Issue) -> Vec<(Pubkey, Account)> {
     vec![
-        (issue_key(), anchor_account(&issue)),
+        (demo_issue(), anchor_account(&issue)),
         (
-            holder_pda(issue_key(), INVESTOR).0,
+            holder_pda(demo_issue(), INVESTOR).0,
             anchor_account(&stored_holder(INVESTOR)),
         ),
         (INVESTOR, wallet()),
         (INVESTOR_USDC, usdc_account(INVESTOR, FUNDS)),
-        (SUBSCRIPTION_VAULT, usdc_account(issue_key(), issue.raised)),
-        (BOND_MINT, bond_mint(issue_key(), issue.raised)),
+        (SUBSCRIPTION_VAULT, usdc_account(demo_issue(), issue.raised)),
+        (BOND_MINT, bond_mint(demo_issue(), issue.raised)),
         (INVESTOR_BOND, bond_account(INVESTOR, 0)),
         (USDC_MINT, usdc_mint(1_000_000_000_000_000)),
         token_program(),
@@ -496,7 +464,7 @@ fn subscribe_moves_usdc_into_the_escrow_and_mints_the_bond_at_once() {
     assert_eq!(token_balance(&result, &INVESTOR_BOND), LOTS);
     assert_eq!(bond_supply(&result), LOTS);
 
-    let issue: Issue = decode(&result, &issue_key());
+    let issue: Issue = decode(&result, &demo_issue());
     assert_eq!(issue.raised, LOTS);
     assert_eq!(
         issue.state,
@@ -512,7 +480,7 @@ fn a_contribution_adds_to_what_others_already_raised() {
     let already = 40_000_000;
     let result = subscribe(subscribing_with(already), LOTS);
 
-    let issue: Issue = decode(&result, &issue_key());
+    let issue: Issue = decode(&result, &demo_issue());
 
     assert_eq!(issue.raised, already + LOTS);
     assert_eq!(token_balance(&result, &SUBSCRIPTION_VAULT), already + LOTS);
@@ -545,7 +513,7 @@ fn the_last_contribution_is_accepted_only_up_to_what_is_left() {
     );
     assert_eq!(token_balance(&result, &INVESTOR_BOND), tail);
 
-    let issue: Issue = decode(&result, &issue_key());
+    let issue: Issue = decode(&result, &demo_issue());
     assert_eq!(issue.raised, issue.face);
 }
 
@@ -556,12 +524,12 @@ fn a_full_raise_closes_the_issue_as_funded() {
     let face = stored_issue(IssueState::Subscribing, 0).face;
 
     let short = subscribe(subscribing_with(face - LOTS - 1), LOTS);
-    let short: Issue = decode(&short, &issue_key());
+    let short: Issue = decode(&short, &demo_issue());
     assert_eq!(short.state, IssueState::Subscribing);
     assert_eq!(short.raised, face - 1);
 
     let full = subscribe(subscribing_with(face - LOTS), LOTS);
-    let full: Issue = decode(&full, &issue_key());
+    let full: Issue = decode(&full, &demo_issue());
     assert_eq!(full.state, IssueState::Funded);
     assert_eq!(full.raised, face);
 }
@@ -648,7 +616,7 @@ fn a_fully_subscribed_issue_refuses_another_contribution() {
 fn subscribe_refuses_a_wallet_with_no_open_ledger() {
     let accounts = replacing(
         &subscribe_accounts(subscribing_with(0)),
-        holder_pda(issue_key(), INVESTOR).0,
+        holder_pda(demo_issue(), INVESTOR).0,
         uninitialized(),
     );
 
@@ -666,12 +634,12 @@ fn subscribe_refuses_a_wallet_with_no_open_ledger() {
 fn subscribe_refuses_the_ledger_of_another_wallet() {
     let mut accounts = subscribe_accounts(subscribing_with(0));
     accounts[1] = (
-        holder_pda(issue_key(), BUYER).0,
+        holder_pda(demo_issue(), BUYER).0,
         anchor_account(&stored_holder(BUYER)),
     );
 
     setup().process_and_validate_instruction(
-        &subscribe_ix_with(holder_pda(issue_key(), BUYER).0, SUBSCRIPTION_VAULT, LOTS),
+        &subscribe_ix_with(holder_pda(demo_issue(), BUYER).0, SUBSCRIPTION_VAULT, LOTS),
         &accounts,
         &[anchor_err(anchor_lang::error::ErrorCode::ConstraintSeeds)],
     );
@@ -683,10 +651,10 @@ fn subscribe_refuses_the_ledger_of_another_wallet() {
 #[test]
 fn subscribe_refuses_an_escrow_that_is_not_the_subscription_one() {
     let mut accounts = subscribe_accounts(subscribing_with(0));
-    accounts[4] = (ESCROW_VAULT, usdc_account(issue_key(), 0));
+    accounts[4] = (ESCROW_VAULT, usdc_account(demo_issue(), 0));
 
     setup().process_and_validate_instruction(
-        &subscribe_ix_with(holder_pda(issue_key(), INVESTOR).0, ESCROW_VAULT, LOTS),
+        &subscribe_ix_with(holder_pda(demo_issue(), INVESTOR).0, ESCROW_VAULT, LOTS),
         &accounts,
         &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
     );

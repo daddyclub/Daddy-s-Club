@@ -8,14 +8,19 @@
 //! Мінт, обидва сховища і список гука створюються тією ж інструкцією, тому в
 //! наборі акаунтів вони приходять порожніми — рівно такими, якими їх бачить
 //! ланцюг до виклику.
+//!
+//! Друга половина файлу — `withdraw_proceeds` (`FR-012`, `FR-034`). Там випуск
+//! приходить уже створеним і вже зібраним: створення перевірене вище, і тягнути
+//! його в кожен прогін означало б міряти дві інструкції одним тестом. Кожна
+//! видача дивиться на чотири величини одразу — що лишилось у сховищі підписки,
+//! скільки взяв протокол, скільки дійшло емітенту і в якому стані вийшов
+//! випуск: зійшлися вони поодинці — ще не значить, що зійшлися між собою.
 
 #[path = "harness.rs"]
 mod harness;
 
 use {
-    anchor_lang::{
-        solana_program::program_option::COption as HookCOption, InstructionData, Space,
-    },
+    anchor_lang::{solana_program::program_option::COption as HookCOption, InstructionData, Space},
     anchor_spl::token_2022::spl_token_2022::{
         extension::{transfer_hook::TransferHook, BaseStateWithExtensions, StateWithExtensions},
         state::{Account as HookTokenAccount, Mint as HookMint},
@@ -23,7 +28,7 @@ use {
     daddys_club::{
         errors::ClubError,
         instructions::issue::{hook_account_metas, IssueParams, EXTRA_ACCOUNT_METAS},
-        state::{Issue, IssueState, RevenueSource},
+        state::{Issue, IssueState, ProtocolConfig, RevenueSource},
     },
     harness::*,
     mollusk_svm::result::Check,
@@ -39,15 +44,6 @@ use {
 /// але джерело без нього не буває.
 const AUTHORITY: Pubkey = Pubkey::new_from_array([31u8; 32]);
 const SOURCE_VAULT: Pubkey = Pubkey::new_from_array([32u8; 32]);
-
-/// Мінт бонду і два сховища — звичайні акаунти, які емітент підписує при
-/// створенні. Ключі довільні саме тому, що дерівацією не задані: знайти їх
-/// можна лише з самого `Issue`.
-const SUBSCRIPTION_VAULT: Pubkey = Pubkey::new_from_array([33u8; 32]);
-const ESCROW_VAULT: Pubkey = Pubkey::new_from_array([34u8; 32]);
-
-const SOURCE_SEQ: u64 = 0;
-const SEQ: u64 = 0;
 
 /// Дохід, який джерело вже пропустило через себе до випуску. Ненульовий
 /// навмисно: зріз під `FR-030` інакше не відрізнити від нуля за замовчуванням.
@@ -111,7 +107,10 @@ fn create_ix(issuer: Pubkey, seq: u64, params: IssueParams) -> Instruction {
 fn create_accounts(issuer: Pubkey, seq: u64) -> Vec<(Pubkey, Account)> {
     vec![
         (config_pda().0, anchor_account(&stored_config())),
-        (source_key(issuer), anchor_account(&stored_source(issuer, None))),
+        (
+            source_key(issuer),
+            anchor_account(&stored_source(issuer, None)),
+        ),
         (issue_key(issuer, seq), uninitialized()),
         (issuer, wallet()),
         (USDC_MINT, usdc_mint(0)),
@@ -136,8 +135,8 @@ fn anchor_err(code: anchor_lang::error::ErrorCode) -> Check<'static> {
 /// створення — одна транзакція, і дивитись на її наслідки треба з одного місця.
 fn create(params: IssueParams) -> mollusk_svm::result::InstructionResult {
     setup().process_and_validate_instruction(
-        &create_ix(ISSUER, SEQ, params),
-        &create_accounts(ISSUER, SEQ),
+        &create_ix(ISSUER, ISSUE_SEQ, params),
+        &create_accounts(ISSUER, ISSUE_SEQ),
         &[Check::success()],
     )
 }
@@ -146,8 +145,8 @@ fn create(params: IssueParams) -> mollusk_svm::result::InstructionResult {
 /// мінта, джерело лишається вільним.
 fn refuse(params: IssueParams, expected: Check<'_>) {
     setup().process_and_validate_instruction(
-        &create_ix(ISSUER, SEQ, params),
-        &create_accounts(ISSUER, SEQ),
+        &create_ix(ISSUER, ISSUE_SEQ, params),
+        &create_accounts(ISSUER, ISSUE_SEQ),
         &[expected],
     );
 }
@@ -157,7 +156,7 @@ fn create_issue_freezes_the_terms_the_issuer_asked_for() {
     let params = terms();
     let result = create(params);
 
-    let issue: Issue = decode(&result, &issue_key(ISSUER, SEQ));
+    let issue: Issue = decode(&result, &issue_key(ISSUER, ISSUE_SEQ));
 
     assert_eq!(issue.source, anchor_key(source_key(ISSUER)));
     assert_eq!(issue.bond_mint, anchor_key(BOND_MINT));
@@ -169,8 +168,8 @@ fn create_issue_freezes_the_terms_the_issuer_asked_for() {
     assert_eq!(issue.maturity_ts, params.maturity_ts);
     assert_eq!(issue.subscription_end_ts, params.subscription_end_ts);
     assert_eq!(issue.min_lot, params.min_lot);
-    assert_eq!(issue.seq, SEQ);
-    assert_eq!(issue.bump, issue_pda(source_key(ISSUER), SEQ).1);
+    assert_eq!(issue.seq, ISSUE_SEQ);
+    assert_eq!(issue.bump, issue_pda(source_key(ISSUER), ISSUE_SEQ).1);
 }
 
 /// `FR-018`: зобов'язання рахується один раз, тут, і далі не залежить від того,
@@ -179,7 +178,7 @@ fn create_issue_freezes_the_terms_the_issuer_asked_for() {
 fn a_fresh_issue_owes_face_plus_coupon_and_has_repaid_nothing() {
     let result = create(terms());
 
-    let issue: Issue = decode(&result, &issue_key(ISSUER, SEQ));
+    let issue: Issue = decode(&result, &issue_key(ISSUER, ISSUE_SEQ));
 
     assert_eq!(issue.obligation_total, 273_750_000_000);
     assert_eq!(issue.raised, 0);
@@ -197,7 +196,10 @@ fn creating_an_issue_takes_the_source_and_marks_the_revenue_seen_so_far() {
 
     let source: RevenueSource = decode(&result, &source_key(ISSUER));
 
-    assert_eq!(source.active_issue, Some(anchor_key(issue_key(ISSUER, SEQ))));
+    assert_eq!(
+        source.active_issue,
+        Some(anchor_key(issue_key(ISSUER, ISSUE_SEQ)))
+    );
     assert_eq!(source.observed_before_issue, OBSERVED);
     // Історія при цьому не переписується: вона й далі рахується від реєстрації.
     assert_eq!(source.first_seen_ts, NOW - 30 * DAY);
@@ -211,7 +213,7 @@ fn a_source_that_already_backs_an_issue_refuses_a_second_one() {
     let taken = replacing(
         &create_accounts(ISSUER, 1),
         source_key(ISSUER),
-        anchor_account(&stored_source(ISSUER, Some(issue_key(ISSUER, SEQ)))),
+        anchor_account(&stored_source(ISSUER, Some(issue_key(ISSUER, ISSUE_SEQ)))),
     );
 
     mollusk.process_and_validate_instruction(
@@ -235,7 +237,7 @@ fn the_bond_mint_is_born_empty_with_a_hook_nobody_can_move() {
     assert_eq!(unpacked.base.decimals, 0);
     assert_eq!(
         unpacked.base.mint_authority,
-        HookCOption::Some(anchor_key(issue_key(ISSUER, SEQ)))
+        HookCOption::Some(anchor_key(issue_key(ISSUER, ISSUE_SEQ)))
     );
     // Заморожений бонд не передається, а `FR-017` обіцяє передачу з обліком, а
     // не заборону.
@@ -264,7 +266,7 @@ fn both_vaults_are_empty_and_answer_only_to_the_issue() {
         assert_eq!(unpacked.base.mint, anchor_key(USDC_MINT));
         assert_eq!(
             unpacked.base.owner,
-            anchor_key(issue_key(ISSUER, SEQ)),
+            anchor_key(issue_key(ISSUER, ISSUE_SEQ)),
             "підписати переказ зі сховища має вміти лише програма"
         );
     }
@@ -281,9 +283,11 @@ fn the_hook_list_on_chain_is_the_one_the_program_builds() {
         .get_account(&extra_metas_pda(BOND_MINT).0)
         .expect("список є в результаті");
 
-    let metas = hook_account_metas(&anchor_key(issue_key(ISSUER, SEQ))).expect("меты будуються");
+    let metas =
+        hook_account_metas(&anchor_key(issue_key(ISSUER, ISSUE_SEQ))).expect("меты будуються");
     let mut expected = vec![0u8; ExtraAccountMetaList::size_of(EXTRA_ACCOUNT_METAS).unwrap()];
-    ExtraAccountMetaList::init::<ExecuteInstruction>(&mut expected, &metas).expect("список пишеться");
+    ExtraAccountMetaList::init::<ExecuteInstruction>(&mut expected, &metas)
+        .expect("список пишеться");
 
     assert_eq!(stored.owner, club_id());
     assert_eq!(stored.data, expected);
@@ -296,17 +300,17 @@ fn create_issue_refuses_to_overwrite_an_issue_that_already_exists() {
     let mollusk = setup();
     let created = create(terms());
 
-    let existing = create_accounts(ISSUER, SEQ);
+    let existing = create_accounts(ISSUER, ISSUE_SEQ);
     let existing = replacing(
         &existing,
-        issue_key(ISSUER, SEQ),
+        issue_key(ISSUER, ISSUE_SEQ),
         created
-            .get_account(&issue_key(ISSUER, SEQ))
+            .get_account(&issue_key(ISSUER, ISSUE_SEQ))
             .expect("випуск є в результаті")
             .clone(),
     );
 
-    let result = mollusk.process_instruction(&create_ix(ISSUER, SEQ, terms()), &existing);
+    let result = mollusk.process_instruction(&create_ix(ISSUER, ISSUE_SEQ, terms()), &existing);
 
     assert!(
         !result.program_result.is_ok(),
@@ -334,14 +338,14 @@ fn create_issue_refuses_a_term_outside_the_protocol_range() {
         setup().process_and_validate_instruction(
             &create_ix(
                 ISSUER,
-                SEQ,
+                ISSUE_SEQ,
                 IssueParams {
                     maturity_ts: NOW + tenor,
                     subscription_end_ts: NOW + DAY,
                     ..terms()
                 },
             ),
-            &create_accounts(ISSUER, SEQ),
+            &create_accounts(ISSUER, ISSUE_SEQ),
             &[Check::success()],
         );
     }
@@ -364,13 +368,13 @@ fn create_issue_refuses_a_share_above_the_protocol_cap() {
     setup().process_and_validate_instruction(
         &create_ix(
             ISSUER,
-            SEQ,
+            ISSUE_SEQ,
             IssueParams {
                 pledge_bps: cap,
                 ..terms()
             },
         ),
-        &create_accounts(ISSUER, SEQ),
+        &create_accounts(ISSUER, ISSUE_SEQ),
         &[Check::success()],
     );
 }
@@ -417,10 +421,10 @@ fn create_issue_refuses_a_window_that_closes_outside_the_life_of_the_issue() {
 fn create_issue_refuses_to_build_on_another_issuers_source() {
     let mollusk = setup();
 
-    let mut instruction = create_ix(ISSUER, SEQ, terms());
+    let mut instruction = create_ix(ISSUER, ISSUE_SEQ, terms());
     instruction.accounts[3] = AccountMeta::new(OUTSIDER, true);
 
-    let mut accounts = create_accounts(ISSUER, SEQ);
+    let mut accounts = create_accounts(ISSUER, ISSUE_SEQ);
     accounts[3] = (OUTSIDER, wallet());
 
     mollusk.process_and_validate_instruction(
@@ -437,10 +441,10 @@ fn create_issue_refuses_a_mint_that_is_not_the_protocol_currency() {
     let mollusk = setup();
     let other_mint = Pubkey::new_from_array([99u8; 32]);
 
-    let mut instruction = create_ix(ISSUER, SEQ, terms());
+    let mut instruction = create_ix(ISSUER, ISSUE_SEQ, terms());
     instruction.accounts[4] = AccountMeta::new_readonly(other_mint, false);
 
-    let mut accounts = create_accounts(ISSUER, SEQ);
+    let mut accounts = create_accounts(ISSUER, ISSUE_SEQ);
     accounts[4] = (other_mint, usdc_mint(0));
 
     mollusk.process_and_validate_instruction(
@@ -455,9 +459,15 @@ fn create_issue_refuses_to_run_before_the_protocol_exists() {
     let mollusk = setup();
 
     mollusk.process_and_validate_instruction(
-        &create_ix(ISSUER, SEQ, terms()),
-        &replacing(&create_accounts(ISSUER, SEQ), config_pda().0, uninitialized()),
-        &[anchor_err(anchor_lang::error::ErrorCode::AccountNotInitialized)],
+        &create_ix(ISSUER, ISSUE_SEQ, terms()),
+        &replacing(
+            &create_accounts(ISSUER, ISSUE_SEQ),
+            config_pda().0,
+            uninitialized(),
+        ),
+        &[anchor_err(
+            anchor_lang::error::ErrorCode::AccountNotInitialized,
+        )],
     );
 }
 
@@ -468,9 +478,304 @@ fn the_issue_account_is_exactly_the_size_the_clients_expect() {
     let result = create(terms());
 
     let stored = result
-        .get_account(&issue_key(ISSUER, SEQ))
+        .get_account(&issue_key(ISSUER, ISSUE_SEQ))
         .expect("випуск є в результаті");
 
     assert_eq!(stored.data.len(), 8 + Issue::INIT_SPACE);
     assert_eq!(stored.owner, club_id());
+}
+
+// ---- withdraw_proceeds (`FR-012`, `FR-034`) ---------------------------------
+
+/// USDC-рахунок емітента і чужа скарбниця. Ключі довільні: дерівацією вони не
+/// задані — це звичайні токен-акаунти.
+const ISSUER_USDC: Pubkey = Pubkey::new_from_array([43u8; 32]);
+const OUTSIDE_VAULT: Pubkey = Pubkey::new_from_array([44u8; 32]);
+
+/// Комісія на номіналі картки M0: 250 000 USDC × 1.5% демо-протоколу.
+const FEE: u64 = 3_750_000_000;
+
+/// Зібраний випуск: рівність `raised == face`, якою `subscribe` і ставить
+/// `Funded` (`FR-010`). Сховище підписки в наборі акаунтів наповнюється з
+/// `raised`, тому світ лишається узгодженим сам із собою.
+fn funded() -> Issue {
+    let issue = stored_issue(IssueState::Funded, 0);
+
+    Issue {
+        raised: issue.face,
+        ..issue
+    }
+}
+
+fn withdraw_ix() -> Instruction {
+    withdraw_ix_with(ISSUER, SUBSCRIPTION_VAULT, FEE_VAULT, ISSUER_USDC)
+}
+
+/// Той самий виклик із підміненим підписантом, сховищем, скарбницею або
+/// рахунком емітента: у цих випадках змінюється не вміст акаунта, а те, який
+/// акаунт подали, — і `replacing` тут не допомагає.
+fn withdraw_ix_with(
+    issuer: Pubkey,
+    vault: Pubkey,
+    fee_vault: Pubkey,
+    issuer_usdc: Pubkey,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        club_id(),
+        &daddys_club::instruction::WithdrawProceeds {}.data(),
+        vec![
+            AccountMeta::new_readonly(config_pda().0, false),
+            AccountMeta::new(demo_issue(), false),
+            // Джерело прибите до випуску через `has_one`, тому воно те саме
+            // навіть тоді, коли підписує хтось інший.
+            AccountMeta::new_readonly(source_key(ISSUER), false),
+            AccountMeta::new_readonly(issuer, true),
+            AccountMeta::new(issuer_usdc, false),
+            AccountMeta::new(vault, false),
+            AccountMeta::new(fee_vault, false),
+            AccountMeta::new_readonly(USDC_MINT, false),
+            AccountMeta::new_readonly(token_program().0, false),
+        ],
+    )
+}
+
+/// Світ на момент видачі: у сховищі підписки лежить рівно зібране, рахунок
+/// емітента порожній, скарбниця протоколу порожня. Порожні навмисно — так
+/// видно, що прийшло саме звідси.
+fn withdraw_accounts(issue: Issue) -> Vec<(Pubkey, Account)> {
+    vec![
+        (config_pda().0, anchor_account(&stored_config())),
+        (demo_issue(), anchor_account(&issue)),
+        (
+            source_key(ISSUER),
+            anchor_account(&stored_source(ISSUER, Some(demo_issue()))),
+        ),
+        (ISSUER, wallet()),
+        (ISSUER_USDC, usdc_account(ISSUER, 0)),
+        (SUBSCRIPTION_VAULT, usdc_account(demo_issue(), issue.raised)),
+        (FEE_VAULT, usdc_account(ADMIN, 0)),
+        (USDC_MINT, usdc_mint(1_000_000_000_000_000)),
+        token_program(),
+    ]
+}
+
+fn withdraw(issue: Issue) -> mollusk_svm::result::InstructionResult {
+    setup().process_and_validate_instruction(
+        &withdraw_ix(),
+        &withdraw_accounts(issue),
+        &[Check::success()],
+    )
+}
+
+fn refuse_withdrawal(issue: Issue, expected: Check<'_>) {
+    setup().process_and_validate_instruction(
+        &withdraw_ix(),
+        &withdraw_accounts(issue),
+        &[expected],
+    );
+}
+
+/// `FR-012` разом із `FR-034`: емітент отримує номінал за вирахуванням
+/// комісії. Сховище підписки при цьому спорожняється повністю — усе зібране
+/// пішло, і жодна одиниця не лишилась ні за ким.
+#[test]
+fn withdraw_proceeds_hands_the_issuer_the_face_less_the_fee() {
+    let face = funded().face;
+    let result = withdraw(funded());
+
+    assert_eq!(token_balance(&result, &SUBSCRIPTION_VAULT), 0);
+    assert_eq!(token_balance(&result, &FEE_VAULT), FEE);
+    assert_eq!(token_balance(&result, &ISSUER_USDC), face - FEE);
+    // Комісія і виплата разом — це рівно номінал: грошей не з'явилось і не
+    // зникло, вони лише розійшлись на дві адреси.
+    assert_eq!(
+        token_balance(&result, &FEE_VAULT) + token_balance(&result, &ISSUER_USDC),
+        face
+    );
+}
+
+/// Видача — це мить, коли зобов'язання виникає, тому випуск виходить звідси в
+/// `Repaying`: `FR-011` каже, що в недозібраного випуску перехоплення **не**
+/// вмикається, а тут воно й вмикається (`FR-014`). Умови при цьому не
+/// рухаються — їх не редагує жодна інструкція (`FR-002`).
+#[test]
+fn the_payout_leaves_the_issue_in_repayment_and_owing_the_same() {
+    let before = funded();
+    let result = withdraw(funded());
+
+    let issue: Issue = decode(&result, &demo_issue());
+
+    assert_eq!(issue.state, IssueState::Repaying);
+    assert_eq!(issue.raised, before.raised);
+    assert_eq!(issue.face, before.face);
+    assert_eq!(issue.obligation_total, before.obligation_total);
+    // Погашення ще не починалось: комісія протоколу — не виплата власникам.
+    assert_eq!(issue.repaid_total, 0);
+    assert_eq!(issue.payout_index, 0);
+}
+
+/// `FR-034`: ставка — параметр протоколу, а не умова випуску. Саме тому конфіг
+/// є в наборі акаунтів: у випуску ставки немає й бути не може.
+#[test]
+fn the_fee_follows_the_rate_the_protocol_holds_at_the_moment_of_the_payout() {
+    let face = funded().face;
+    let raised_rate = ProtocolConfig {
+        origination_fee_bps: 200,
+        ..stored_config()
+    };
+
+    let result = setup().process_and_validate_instruction(
+        &withdraw_ix(),
+        &replacing(
+            &withdraw_accounts(funded()),
+            config_pda().0,
+            anchor_account(&raised_rate),
+        ),
+        &[Check::success()],
+    );
+
+    assert_eq!(token_balance(&result, &FEE_VAULT), 5_000_000_000);
+    assert_eq!(token_balance(&result, &ISSUER_USDC), face - 5_000_000_000);
+}
+
+/// Окремого прапорця «видано» у випуску немає, тому двері зачиняє сам стан:
+/// випуск, який уже пішов у погашення, віддати номінал удруге не може.
+#[test]
+fn the_proceeds_can_be_taken_only_once() {
+    let taken = withdraw(funded());
+
+    let already = replacing(
+        &withdraw_accounts(funded()),
+        demo_issue(),
+        taken.get_account(&demo_issue()).expect("випуск").clone(),
+    );
+
+    setup().process_and_validate_instruction(
+        &withdraw_ix(),
+        &already,
+        &[custom(ClubError::ProceedsAlreadyWithdrawn)],
+    );
+
+    // Прострочення й повне погашення — теж «після видачі»: гроші зі сховища
+    // підписки пішли ще раніше.
+    for state in [IssueState::PastDue, IssueState::Repaid] {
+        refuse_withdrawal(
+            Issue { state, ..funded() },
+            custom(ClubError::ProceedsAlreadyWithdrawn),
+        );
+    }
+}
+
+/// `FR-012`: до повного збору кошти лежать в ескроу і належать інвесторам.
+/// Недозібраний випуск не дає емітенту нічого й після закриття вікна — звідти
+/// шлях лише в повернення (`FR-011`).
+#[test]
+fn an_issue_that_was_not_funded_pays_the_issuer_nothing() {
+    for state in [IssueState::Subscribing, IssueState::Failed] {
+        let issue = stored_issue(state, 0);
+
+        refuse_withdrawal(
+            Issue {
+                raised: issue.face,
+                ..issue
+            },
+            custom(ClubError::IssueNotFunded),
+        );
+    }
+}
+
+/// Другий замок на `FR-010`: `Funded` ставить `subscribe` рівно на рівності
+/// `raised == face`, і саме вона дає право видавати номінал. Стан складається
+/// руками, бо через саму програму в таку розбіжність не потрапити — без замка
+/// емітент забрав би більше, ніж інвестори внесли.
+#[test]
+fn a_funded_issue_that_did_not_actually_raise_the_face_pays_out_nothing() {
+    let short = funded();
+
+    refuse_withdrawal(
+        Issue {
+            raised: short.face - short.min_lot,
+            ..short
+        },
+        custom(ClubError::IssueNotFunded),
+    );
+}
+
+/// У випуску два сховища на одній валюті й одній authority. Ескроу погашення
+/// тримає гроші власників бондів, і виглядає воно цілком «своїм» — тому
+/// підміна ловиться `has_one`, а не оком.
+#[test]
+fn the_repayment_escrow_is_not_a_vault_this_payout_may_touch() {
+    let mut accounts = withdraw_accounts(funded());
+    accounts[5] = (ESCROW_VAULT, usdc_account(demo_issue(), funded().face));
+
+    setup().process_and_validate_instruction(
+        &withdraw_ix_with(ISSUER, ESCROW_VAULT, FEE_VAULT, ISSUER_USDC),
+        &accounts,
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
+    );
+}
+
+/// `FR-004`: емітента випуск не знає — його знає джерело. Чужий підпис не
+/// доходить до тіла інструкції взагалі.
+#[test]
+fn only_the_issuer_behind_the_source_may_take_the_proceeds() {
+    let mut accounts = withdraw_accounts(funded());
+    accounts[3] = (OUTSIDER, wallet());
+    accounts[4] = (ISSUER_USDC, usdc_account(OUTSIDER, 0));
+
+    setup().process_and_validate_instruction(
+        &withdraw_ix_with(OUTSIDER, SUBSCRIPTION_VAULT, FEE_VAULT, ISSUER_USDC),
+        &accounts,
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
+    );
+}
+
+/// `FR-034`: комісія йде туди, куди показує протокол, а не туди, куди показав
+/// викликач. Скарбницю прибиває `has_one` на конфігу.
+#[test]
+fn the_fee_goes_only_to_the_treasury_the_protocol_names() {
+    let mut accounts = withdraw_accounts(funded());
+    accounts[6] = (OUTSIDE_VAULT, usdc_account(OUTSIDER, 0));
+
+    setup().process_and_validate_instruction(
+        &withdraw_ix_with(ISSUER, SUBSCRIPTION_VAULT, OUTSIDE_VAULT, ISSUER_USDC),
+        &accounts,
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
+    );
+}
+
+/// Скарбниця в чужому мінті прийняла б переказ, якого протокол не вміє
+/// витрачати. Валюта звірена ще в `init_protocol`, але звіряється й тут — з
+/// тим самим мінтом, яким рахується переказ.
+#[test]
+fn a_treasury_in_another_currency_takes_no_fee() {
+    setup().process_and_validate_instruction(
+        &withdraw_ix(),
+        &replacing(
+            &withdraw_accounts(funded()),
+            FEE_VAULT,
+            bond_account(ADMIN, 0),
+        ),
+        &[anchor_err(
+            anchor_lang::error::ErrorCode::ConstraintTokenMint,
+        )],
+    );
+}
+
+/// `FR-012`: номінал отримує саме емітент. Підпис дає право забрати гроші, а
+/// не право відправити їх кому завгодно.
+#[test]
+fn the_proceeds_go_only_to_an_account_the_issuer_controls() {
+    setup().process_and_validate_instruction(
+        &withdraw_ix(),
+        &replacing(
+            &withdraw_accounts(funded()),
+            ISSUER_USDC,
+            usdc_account(OUTSIDER, 0),
+        ),
+        &[anchor_err(
+            anchor_lang::error::ErrorCode::ConstraintTokenOwner,
+        )],
+    );
 }

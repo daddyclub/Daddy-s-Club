@@ -1,4 +1,5 @@
-//! Випуск бонду: створення (`FR-001`…`FR-006`, `FR-013`).
+//! Випуск бонду: створення (`FR-001`…`FR-006`, `FR-013`) і видача зібраного
+//! емітенту (`FR-012`, `FR-034`).
 //!
 //! Тут умови стають незмінними. `FR-002` виконується не перевіркою, а
 //! відсутністю: інструкції, яка редагує `Issue`, у програмі немає взагалі, тому
@@ -28,6 +29,21 @@
 //! Чого тут навмисно немає — порогу історії доходу (`FR-007`). Він приїде
 //! окремою задачею (T040) разом зі своїм негативним тестом; до того випуск може
 //! створити будь-хто, і віха M1 каже про це прямим текстом.
+//!
+//! **Видача — друга половина файлу.** Це та мить, коли зібране перестає
+//! належати інвесторам і зобов'язання виникає (`FR-012`), тому в ній сходяться
+//! три речі, яких у підписці не було:
+//!
+//! - **конфіг повертається в набір акаунтів.** Ставки комісії у випуску немає й
+//!   бути не може (`FR-002` заморозив умови, а `FR-036` дозволяє змінювати
+//!   ставку), тому і ставка, і скарбниця беруться з `ProtocolConfig`;
+//! - **сховищ у випуску два, і чіпати можна рівно одне.** Номінал лежить у
+//!   сховищі підписки; ескроу погашення тримає гроші власників бондів і в цей
+//!   набір акаунтів не входить узагалі. `has_one` рятує лише того, хто назвав
+//!   правильне поле, — тому поле назване, а зайве сховище не подане;
+//! - **випуск виходить звідси в `Repaying`.** Окремого прапорця «видано» в
+//!   `Issue` немає: записом про видачу є сам стан, і саме він зачиняє двері
+//!   другому виклику.
 
 use {
     crate::{
@@ -40,7 +56,7 @@ use {
     },
     anchor_lang::prelude::*,
     anchor_spl::{
-        token_2022::Token2022,
+        token_2022::{transfer_checked, Token2022, TransferChecked},
         token_interface::{Mint, TokenAccount},
     },
     spl_tlv_account_resolution::{
@@ -323,9 +339,160 @@ pub fn create_issue(ctx: Context<CreateIssue>, seq: u64, params: IssueParams) ->
     Ok(())
 }
 
+// ---- Видача зібраного (`FR-012`, `FR-034`) ---------------------------------
+
+/// `FR-034`: origination fee, утриманий із номіналу при успішному закритті.
+///
+/// Округлення вниз, як і скрізь: відкинутий залишок дістається емітенту, а
+/// протокол ніколи не бере більше за оголошену ставку.
+///
+/// У `math.rs` функція не поїхала навмисно — там арифметика погашення, а це
+/// правило утримання, і дзеркала в `math.ts` воно поки не потребує: жодна
+/// вимога не просить клієнта показувати комісію. Поїде туди разом із фікстурою
+/// й дзеркалом того дня, коли її захоче показати екран, — та сама межа, що й у
+/// часткового прийому з `subscribe`.
+fn origination_fee(face: u128, fee_bps: u16) -> Result<u128> {
+    face.checked_mul(u128::from(fee_bps))
+        .and_then(|scaled| scaled.checked_div(math::BPS_DENOM))
+        .ok_or_else(|| error!(ClubError::MathOverflow))
+}
+
+#[derive(Accounts)]
+pub struct WithdrawProceeds<'info> {
+    /// Ставки комісії у випуску немає й бути не може: `FR-002` заморозив умови,
+    /// а `FR-036` дозволяє змінювати ставку протоколу. Тому і ставка, і
+    /// скарбниця беруться звідси — саме через це конфіг є в цьому наборі, хоч у
+    /// `subscribe` його не було. Скарбницю прибиває `has_one`: комісія має йти
+    /// туди, куди показує протокол, а не туди, куди показав викликач.
+    #[account(
+        seeds = [CONFIG_SEED],
+        bump = config.bump,
+        has_one = fee_vault,
+    )]
+    pub config: Account<'info, ProtocolConfig>,
+
+    /// `has_one = subscription_vault` називає **те** сховище. У випуску їх два,
+    /// обидва в USDC і обидва на authority випуску, тому переплутати їх — це
+    /// віддати емітенту гроші, зібрані на виплати власникам бондів. `has_one`
+    /// рятує лише того, хто назвав правильне поле; ескроу погашення в цей набір
+    /// не входить узагалі — інструкція, яка його не бачить, не зачепить його й
+    /// помилково.
+    #[account(mut, has_one = source, has_one = subscription_vault)]
+    pub issue: Account<'info, Issue>,
+
+    /// Емітента випуск не знає — його знає джерело (`FR-004`). Seeds тут не
+    /// потрібні: ланцюг «випуск → його джерело → підпис» уже прибитий двома
+    /// `has_one`, а `RevenueSource` із дискримінатором і власником-нашою-
+    /// програмою з'являється лише з `register_source`.
+    #[account(has_one = issuer)]
+    pub source: Account<'info, RevenueSource>,
+
+    pub issuer: Signer<'info>,
+
+    /// `FR-012`: номінал за вирахуванням комісії отримує саме емітент. Тому
+    /// рахунок мусить відповідати йому, а не будь-кому, кого він назве:
+    /// підпис дає право забрати гроші, а не право відправити їх кудись.
+    #[account(mut, token::mint = usdc_mint, token::authority = issuer)]
+    pub issuer_usdc: InterfaceAccount<'info, TokenAccount>,
+
+    /// `FR-008`: доти зібране лежало тут і належало інвесторам.
+    #[account(mut, token::mint = usdc_mint)]
+    pub subscription_vault: InterfaceAccount<'info, TokenAccount>,
+
+    /// `FR-034`: скарбниця протоколу. Валюта звірена ще в `init_protocol`, тут
+    /// вона звіряється вдруге — з тим самим мінтом, яким рахується переказ.
+    #[account(mut, token::mint = usdc_mint)]
+    pub fee_vault: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(address = config.usdc_mint)]
+    pub usdc_mint: InterfaceAccount<'info, Mint>,
+
+    pub token_program: Program<'info, Token2022>,
+}
+
+/// Видача зібраного емітенту (`FR-012`) з утриманням origination fee
+/// (`FR-034`).
+///
+/// Це та мить, коли гроші перестають належати інвесторам: до неї вони лежать в
+/// ескроу підписки, після неї в емітента є зобов'язання, а в потоку — частка,
+/// що відщеплюється (`FR-014`). Тому інструкція лишає випуск у `Repaying`:
+/// `FR-031` знає стан «погашається», `FR-011` каже, що в недозібраного випуску
+/// перехоплення **не** вмикається, — а тут воно й вмикається.
+pub fn withdraw_proceeds(ctx: Context<WithdrawProceeds>) -> Result<()> {
+    let issue = &ctx.accounts.issue;
+
+    // Окремого прапорця «видано» у випуску немає — записом про видачу є сам
+    // стан. Тому «уже забрано» відрізняється від «ще не зібрано» тут, а не
+    // зводиться в одну відмову: на ланцюгу видно лише код помилки, і дві різні
+    // причини вимагають різних дій від того, хто його читає.
+    require!(
+        !matches!(
+            issue.state,
+            IssueState::Repaying | IssueState::PastDue | IssueState::Repaid
+        ),
+        ClubError::ProceedsAlreadyWithdrawn
+    );
+
+    // `FR-012`: до повного збору кошти належать інвесторам, і жодна частина
+    // номіналу емітенту не доступна.
+    require!(issue.state == IssueState::Funded, ClubError::IssueNotFunded);
+
+    // Другий замок на ту саму вимогу. `Funded` ставить `subscribe` рівно на
+    // рівності `raised == face` (`FR-010`), і саме вона дає право видавати
+    // **номінал**, а не зібране: розійдись ці дві величини, емітент забрав би
+    // більше, ніж інвестори внесли. Через саму програму в такий стан не
+    // потрапити — замок лишений тому, що ціна помилки тут виміряна в номіналі.
+    require!(issue.raised == issue.face, ClubError::IssueNotFunded);
+
+    let face = u128::from(issue.face);
+    let fee = origination_fee(face, ctx.accounts.config.origination_fee_bps)?;
+    let proceeds = face.checked_sub(fee).ok_or(ClubError::MathOverflow)?;
+
+    let fee = u64::try_from(fee).map_err(|_| error!(ClubError::MathOverflow))?;
+    let proceeds = u64::try_from(proceeds).map_err(|_| error!(ClubError::MathOverflow))?;
+
+    let source = issue.source;
+    let seq = issue.seq.to_le_bytes();
+    let issue_signer: &[&[&[u8]]] = &[&[ISSUE_SEED, source.as_ref(), &seq, &[issue.bump]]];
+
+    // Обидві виплати відрізняються рівно отримувачем і сумою, тому й стоять
+    // поруч списком: розписані двома блоками, вони різнились би вісімнадцятьма
+    // однаковими рядками на дві зміни. Комісія йде першою — саме тому емітент
+    // отримує номінал «за вирахуванням», а не номінал і рахунок окремо.
+    for (to, amount) in [
+        (ctx.accounts.fee_vault.to_account_info(), fee),
+        (ctx.accounts.issuer_usdc.to_account_info(), proceeds),
+    ] {
+        transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.subscription_vault.to_account_info(),
+                    mint: ctx.accounts.usdc_mint.to_account_info(),
+                    to,
+                    authority: ctx.accounts.issue.to_account_info(),
+                },
+                issue_signer,
+            ),
+            amount,
+            ctx.accounts.usdc_mint.decimals,
+        )?;
+    }
+
+    // Зобов'язання виникло — з цієї миті перехоплення має сенс (`FR-014`), а
+    // другий виклик упреться в цей самий стан.
+    ctx.accounts.issue.state = IssueState::Repaying;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use {super::*, spl_transfer_hook_interface::get_extra_account_metas_address};
+    use {
+        super::*,
+        crate::instructions::protocol::{MAX_ORIGINATION_FEE_BPS, MIN_ORIGINATION_FEE_BPS},
+        spl_transfer_hook_interface::get_extra_account_metas_address,
+    };
 
     const NOW: i64 = 1_800_000_000;
     const DAY: i64 = 86_400;
@@ -477,6 +644,45 @@ mod tests {
         }
         .obligation_total()
         .is_err());
+    }
+
+    // ---- origination fee (`FR-034`) ----
+
+    #[test]
+    fn the_origination_fee_is_the_protocol_rate_on_the_face() {
+        // 250 000 USDC під 1.5% — параметри демо-протоколу на картці M0.
+        assert_eq!(
+            origination_fee(250_000_000_000, config().origination_fee_bps).unwrap(),
+            3_750_000_000
+        );
+    }
+
+    /// Ставка міряється номіналом, а не зобов'язанням: комісія береться при
+    /// закритті випуску (`FR-034`), і купон до неї стосунку не має.
+    #[test]
+    fn the_fee_and_the_proceeds_add_back_up_to_the_face() {
+        for face in [1_u128, 66, 10_001, 250_000_000_000, u128::from(u64::MAX)] {
+            for fee_bps in [MIN_ORIGINATION_FEE_BPS, 150, MAX_ORIGINATION_FEE_BPS] {
+                let fee = origination_fee(face, fee_bps).unwrap();
+                assert!(fee <= face, "комісія {fee} більша за номінал {face}");
+                assert_eq!(fee + (face - fee), face);
+            }
+        }
+    }
+
+    /// Округлення вниз: відкинутий залишок дістається емітенту. Протокол не
+    /// бере більше за оголошену ставку навіть на одну одиницю.
+    #[test]
+    fn the_fee_rounds_down_and_the_remainder_stays_with_the_issuer() {
+        // 66 × 1.5% = 0.99 → 0: увесь номінал іде емітенту.
+        assert_eq!(origination_fee(66, 150).unwrap(), 0);
+        // 10 001 × 1.5% = 150.015 → 150, не 151.
+        assert_eq!(origination_fee(10_001, 150).unwrap(), 150);
+    }
+
+    #[test]
+    fn a_fee_that_overflows_the_multiplication_is_an_error() {
+        assert!(origination_fee(u128::MAX, MIN_ORIGINATION_FEE_BPS).is_err());
     }
 
     /// Головне, що список мусить уміти: привести Token-2022 рівно до тих
