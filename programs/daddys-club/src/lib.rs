@@ -44,4 +44,12 @@ pub mod daddys_club {
     pub fn open_position(ctx: Context<OpenPosition>) -> Result<()> {
         instructions::invest::open_position(ctx)
     }
+
+    /// Приймає внесок у випуск і друкує бонд у тій самій транзакції
+    /// (`FR-008`, `FR-009`, `FR-013`). `amount` — пропозиція: приймається
+    /// стільки, скільки лишилось нерозібраного номіналу, і на повному зборі
+    /// випуск стає `Funded` (`FR-010`).
+    pub fn subscribe(ctx: Context<Subscribe>, amount: u64) -> Result<()> {
+        instructions::invest::subscribe(ctx, amount)
+    }
 }
