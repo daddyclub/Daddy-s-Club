@@ -60,4 +60,13 @@ pub mod daddys_club {
     pub fn withdraw_proceeds(ctx: Context<WithdrawProceeds>) -> Result<()> {
         instructions::issue::withdraw_proceeds(ctx)
     }
+
+    /// Повертає інвесторові внесок із недозібраного випуску: бонд палиться,
+    /// гроші йдуть назад зі сховища підписки, origination fee не утримується
+    /// (`FR-011`). Перший виклик після закриття вікна й позначає випуск
+    /// недозібраним — окремої інструкції на це немає, бо стан на ланцюгу
+    /// однаково лишається старим, доки хтось не надішле транзакцію.
+    pub fn refund(ctx: Context<Refund>) -> Result<()> {
+        instructions::invest::refund(ctx)
+    }
 }

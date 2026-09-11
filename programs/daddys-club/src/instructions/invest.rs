@@ -22,7 +22,14 @@
 //! (`FR-009`), тому бонд друкується в тій самій транзакції, що й внесок, а
 //! етапу розподілу немає взагалі: скільки прийнято, стільки й надруковано
 //! (`FR-013`). Гроші лежать у сховищі підписки і до емітента не доходять доти,
-//! доки випуск не зібрано повністю (`FR-008`, `FR-012`) — видачу пише T021.
+//! доки випуск не зібрано повністю (`FR-008`, `FR-012`) — видачу пише
+//! `withdraw_proceeds`.
+//!
+//! Третя частина — повернення (`FR-011`). Це дзеркало підписки: бонд палиться,
+//! внесок іде назад із того самого сховища, origination fee не утримується.
+//! Разом із поверненням тут живе й **лінивий** перехід випуску в `Failed`:
+//! окремої інструкції «закрити підписку» немає, бо стан на ланцюгу однаково
+//! лишається старим, доки хтось не надішле транзакцію.
 
 use {
     crate::{
@@ -31,7 +38,10 @@ use {
     },
     anchor_lang::prelude::*,
     anchor_spl::{
-        token_2022::{mint_to, transfer_checked, MintTo, Token2022, TransferChecked},
+        token_2022::{
+            burn_checked, mint_to, transfer_checked, BurnChecked, MintTo, Token2022,
+            TransferChecked,
+        },
         token_interface::{Mint, TokenAccount},
     },
 };
@@ -215,6 +225,153 @@ pub fn subscribe(ctx: Context<Subscribe>, amount: u64) -> Result<()> {
     if issue.raised == issue.face {
         issue.state = IssueState::Funded;
     }
+
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct Refund<'info> {
+    /// Той самий `has_one` на обидва боки обміну, що й у `subscribe`: мінт, з
+    /// якого палиться бонд, і сховище, з якого повертаються гроші, прибиті до
+    /// самого випуску.
+    ///
+    /// Ескроу погашення в цей набір не входить узагалі. У випуску два сховища
+    /// на одній валюті й одній authority, і `has_one` рятує лише того, хто
+    /// назвав правильне поле, — тому поле назване, а зайве сховище просто
+    /// відсутнє. Для недозібраного випуску воно до того ж і порожнє: `FR-011`
+    /// каже, що зобов'язання не виникає, а перехоплення не вмикається.
+    #[account(mut, has_one = bond_mint, has_one = subscription_vault)]
+    pub issue: Account<'info, Issue>,
+
+    pub investor: Signer<'info>,
+
+    /// `FR-011`: внесок повертається тому, хто його зробив. Підпис дає право
+    /// забрати свої гроші, а не право відправити їх кому завгодно.
+    #[account(mut, token::mint = usdc_mint, token::authority = investor)]
+    pub investor_usdc: InterfaceAccount<'info, TokenAccount>,
+
+    /// `FR-008`: гроші весь цей час лежали тут і емітенту не діставались. До
+    /// сховища погашення вони не доходили ніколи — туди їх кладе лише
+    /// перехоплення, яке в недозібраного випуску не вмикається.
+    #[account(mut, token::mint = usdc_mint)]
+    pub subscription_vault: InterfaceAccount<'info, TokenAccount>,
+
+    /// Пропозиція меншає рівно на спалене (`FR-013`): бонд, за яким гроші вже
+    /// повернуто, не має лишатись на ланцюгу — інакше він торгувався б як
+    /// вимога до випуску, якої більше немає.
+    #[account(mut)]
+    pub bond_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(mut, token::mint = bond_mint, token::authority = investor)]
+    pub investor_bond: InterfaceAccount<'info, TokenAccount>,
+
+    pub usdc_mint: InterfaceAccount<'info, Mint>,
+
+    pub token_program: Program<'info, Token2022>,
+}
+
+/// Повернення внеску з недозібраного випуску (`FR-011`).
+///
+/// Інструкція несе дві речі: сам обмін бондів на гроші й **лінивий** перехід
+/// випуску в `Failed`. Окремої інструкції «закрити підписку» немає навмисно:
+/// стан на ланцюгу однаково лишається старим, доки хтось не надішле
+/// транзакцію, тому дозвільне закриття не дало б нічого, чого не дає перше ж
+/// повернення. Перший виклик пише `Failed`, наступні застають його вже
+/// написаним і працюють так само.
+///
+/// **Наслідок для читачів (`FR-037`, `FR-031`):** доки ніхто не забрав грошей,
+/// недозібраний випуск на ланцюгу ще каже `Subscribing`. «Недозібрано» — це
+/// `state == Subscribing && now >= subscription_end_ts && raised < face`, і
+/// показувати це треба явно, а не нулями.
+///
+/// Скільки повертати, каже баланс бонду: одиниця токена дорівнює одиниці
+/// номіналу (`FR-013`), а друкувався бонд рівно на прийняте (`FR-009`), тому
+/// «рівно свій внесок» із `FR-011` — це і є те, що лежить на рахунку. Origination
+/// fee не утримується: її бере `withdraw_proceeds`, якого тут не було й не буде.
+///
+/// Облік власника (`FR-038`) у наборі відсутній і не зрушується: `payout_index`
+/// у випуску, який не дійшов до погашення, стоїть на нулі — рухає його лише
+/// перехоплення, а воно працює в `Repaying`. Закривати чекпоінт теж нічого:
+/// `FR-011` про це не просить, а порожній облік нікому не шкодить.
+pub fn refund(ctx: Context<Refund>) -> Result<()> {
+    let issue = &ctx.accounts.issue;
+
+    // Перевірка стану — явна, а не виведена із сум. Випуск у погашенні під
+    // умову `raised < face` не підпадає й сам собою, але покладатись на це
+    // означало б лишити повернення без замка рівно там, де в сховищах лежать
+    // чужі гроші. Дозволених станів два: `Subscribing` — до першого виклику,
+    // `Failed` — після нього.
+    require!(
+        matches!(issue.state, IssueState::Subscribing | IssueState::Failed),
+        ClubError::IssueNotFailed
+    );
+
+    // Контракт із `subscribe`: вікно закрите **з** `subscription_end_ts`, не
+    // після. Дві протилежні дії не діляться однією секундою, а зазор між ними
+    // був би вікном, у якому неможливо ані внести, ані повернути.
+    require!(
+        Clock::get()?.unix_timestamp >= issue.subscription_end_ts,
+        ClubError::SubscriptionWindowStillOpen
+    );
+
+    // `FR-010`: недозібраний — це той, у кого номінал не вибрано. Зібраний
+    // випуск повернень не дає навіть до кінця вікна: `subscribe` закриває його
+    // в `Funded` тієї ж миті, і гроші вже належать не інвесторам.
+    require!(issue.raised < issue.face, ClubError::IssueNotFailed);
+
+    let amount = ctx.accounts.investor_bond.amount;
+    require!(amount > 0, ClubError::NothingToRefund);
+
+    let source = issue.source;
+    let seq = issue.seq.to_le_bytes();
+    let issue_signer: &[&[&[u8]]] = &[&[ISSUE_SEED, source.as_ref(), &seq, &[issue.bump]]];
+
+    // `FR-011` називає порядок: інвестор **повертає** бонд-токени й **забирає**
+    // внесок. Спалення першим і робить другий переказ безпечним — вимога до
+    // випуску зникає до того, як по ній платять, а не після.
+    burn_checked(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            BurnChecked {
+                mint: ctx.accounts.bond_mint.to_account_info(),
+                from: ctx.accounts.investor_bond.to_account_info(),
+                authority: ctx.accounts.investor.to_account_info(),
+            },
+        ),
+        amount,
+        ctx.accounts.bond_mint.decimals,
+    )?;
+
+    transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            TransferChecked {
+                from: ctx.accounts.subscription_vault.to_account_info(),
+                mint: ctx.accounts.usdc_mint.to_account_info(),
+                to: ctx.accounts.investor_usdc.to_account_info(),
+                authority: ctx.accounts.issue.to_account_info(),
+            },
+            issue_signer,
+        ),
+        amount,
+        ctx.accounts.usdc_mint.decimals,
+    )?;
+
+    let raised = u128::from(issue.raised)
+        .checked_sub(u128::from(amount))
+        .ok_or(ClubError::MathOverflow)?;
+    let raised = u64::try_from(raised).map_err(|_| error!(ClubError::MathOverflow))?;
+
+    let issue = &mut ctx.accounts.issue;
+    // Зібране меншає разом зі сховищем і пропозицією бонду: усі три величини
+    // рівні між собою від першого внеску, і повернення не має права їх
+    // розвести. Історії «скільки колись зібрали» тут не лишається — жодна
+    // вимога її не просить, а розбіжність між `raised` і рештою в сховищі
+    // коштувала б рівно стільки, скільки в тому сховищі лежить.
+    issue.raised = raised;
+    // Перший виклик і є тим, хто позначає випуск недозібраним (`FR-011`).
+    // Наступні застають `Failed` і просто пишуть його вдруге.
+    issue.state = IssueState::Failed;
 
     Ok(())
 }

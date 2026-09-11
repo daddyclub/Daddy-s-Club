@@ -1,5 +1,5 @@
-//! `open_position` (`FR-038`) і `subscribe` (`FR-008`…`FR-010`, `FR-013`) на
-//! справжньому байткоді.
+//! `open_position` (`FR-038`), `subscribe` (`FR-008`…`FR-010`, `FR-013`) і
+//! `refund` (`FR-011`) на справжньому байткоді.
 //!
 //! Головне, що доводить перша половина, — не «акаунт створився», а що створився
 //! **саме той** акаунт. Список акаунтів гука лежить у мінті з моменту
@@ -13,6 +13,11 @@
 //! списано з інвестора, скільки лягло в сховище, скільки надруковано і що
 //! записано у випуск. Розбіжність між ними — це або загублені кошти, або бонд
 //! без покриття, і ловити її треба тут.
+//!
+//! Третя частина — повернення (`FR-011`), дзеркало підписки: ті самі чотири
+//! величини, тільки в інший бік, плюс лінивий перехід у `Failed`. Стани тут
+//! складаються руками навмисно — інакше не показати, що замок на стані стоїть
+//! **явно**, а не виводиться з того, що номінал недобрано.
 //!
 //! Випуск тут подається вже створеним: `create_issue` перевірений у своєму
 //! файлі, а тягнути його сюди означало б міряти дві інструкції одним тестом.
@@ -676,4 +681,274 @@ fn subscribe_refuses_usdc_that_belongs_to_somebody_else() {
             anchor_lang::error::ErrorCode::ConstraintTokenOwner,
         )],
     );
+}
+
+// ---- refund (`FR-011`) ------------------------------------------------------
+
+/// Мить, із якої вікно підписки вже закрите. Не «плюс година», а рівно
+/// `subscription_end_ts`: контракт із `subscribe` каже, що ця секунда належить
+/// уже поверненню.
+fn closed_at() -> i64 {
+    stored_issue(IssueState::Subscribing, 0).subscription_end_ts
+}
+
+/// Випуск, у якому зібрано менше за номінал. Стан задає тест: до першого
+/// повернення на ланцюгу він ще `Subscribing`, після нього — `Failed`.
+fn undersubscribed(state: IssueState, raised: u64) -> Issue {
+    Issue {
+        raised,
+        ..stored_issue(state, 0)
+    }
+}
+
+fn refund_ix() -> Instruction {
+    refund_ix_with(SUBSCRIPTION_VAULT)
+}
+
+/// Той самий виклик із підміненим сховищем — акаунт тут не переписується, а
+/// подається інший, і `replacing` для цього не годиться.
+fn refund_ix_with(vault: Pubkey) -> Instruction {
+    Instruction::new_with_bytes(
+        club_id(),
+        &daddys_club::instruction::Refund {}.data(),
+        vec![
+            AccountMeta::new(demo_issue(), false),
+            AccountMeta::new_readonly(INVESTOR, true),
+            AccountMeta::new(INVESTOR_USDC, false),
+            AccountMeta::new(vault, false),
+            AccountMeta::new(BOND_MINT, false),
+            AccountMeta::new(INVESTOR_BOND, false),
+            AccountMeta::new_readonly(USDC_MINT, false),
+            AccountMeta::new_readonly(token_program().0, false),
+        ],
+    )
+}
+
+/// Світ, узгоджений сам із собою, як і в підписці: у сховищі лежить рівно
+/// зібране, пропозиція бонду дорівнює йому ж, а `held` із неї належить
+/// інвесторові — решту приніс хтось інший. Гаманець інвестора порожній
+/// навмисно: так видно, що саме повернулось, а не скільки в нього було.
+fn refund_accounts(issue: Issue, held: u64) -> Vec<(Pubkey, Account)> {
+    vec![
+        (demo_issue(), anchor_account(&issue)),
+        (INVESTOR, wallet()),
+        (INVESTOR_USDC, usdc_account(INVESTOR, 0)),
+        (SUBSCRIPTION_VAULT, usdc_account(demo_issue(), issue.raised)),
+        (BOND_MINT, bond_mint(demo_issue(), issue.raised)),
+        (INVESTOR_BOND, bond_account(INVESTOR, held)),
+        (USDC_MINT, usdc_mint(1_000_000_000_000_000)),
+        token_program(),
+    ]
+}
+
+/// Прогони поза межею — через добу після закриття вікна. Саму межу тримає
+/// один тест, і тримає навмисно: розсипана по всіх прогонах, вона падала б
+/// звідусіль, і зсув на секунду читався б як зламане повернення взагалі.
+fn after_the_window() -> Mollusk {
+    at(closed_at() + DAY)
+}
+
+fn refund(issue: Issue, held: u64) -> InstructionResult {
+    after_the_window().process_and_validate_instruction(
+        &refund_ix(),
+        &refund_accounts(issue, held),
+        &[Check::success()],
+    )
+}
+
+fn refuse_refund(issue: Issue, held: u64, expected: Check<'_>) {
+    after_the_window().process_and_validate_instruction(
+        &refund_ix(),
+        &refund_accounts(issue, held),
+        &[expected],
+    );
+}
+
+/// `FR-011`: інвестор повертає бонд-токени й забирає **рівно свій внесок**.
+/// Обидва боки обміну міряються одним прогоном: бонд без спалення — це вимога
+/// до випуску, за якою гроші вже виплачено, а гроші без бонду — внесок, за
+/// який ніхто не відзвітував.
+#[test]
+fn refund_burns_the_bond_and_returns_the_contribution() {
+    let result = refund(undersubscribed(IssueState::Subscribing, LOTS), LOTS);
+
+    assert_eq!(token_balance(&result, &INVESTOR_USDC), LOTS);
+    assert_eq!(token_balance(&result, &SUBSCRIPTION_VAULT), 0);
+    assert_eq!(token_balance(&result, &INVESTOR_BOND), 0);
+    assert_eq!(bond_supply(&result), 0, "бонд лишився без покриття");
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(issue.raised, 0, "зібране розійшлося зі сховищем");
+}
+
+/// `FR-011`: origination fee не утримується. Комісію бере `withdraw_proceeds`,
+/// якого в недозібраного випуску не було й не буде, — тому повертається рівно
+/// внесене, без жодного вирахування.
+#[test]
+fn no_origination_fee_is_withheld_from_a_refund() {
+    let result = refund(undersubscribed(IssueState::Subscribing, LOTS), LOTS);
+
+    assert_eq!(
+        token_balance(&result, &INVESTOR_USDC),
+        LOTS,
+        "з повернення щось утримали"
+    );
+    assert!(
+        result.get_account(&FEE_VAULT).is_none(),
+        "скарбниця протоколу взагалі не має бути в цьому наборі"
+    );
+}
+
+/// Перехід у `Failed` робить сам `refund`, ліниво: окремої інструкції немає, бо
+/// стан на ланцюгу однаково лишається старим, доки хтось не надішле
+/// транзакцію. Перший виклик його й пише.
+#[test]
+fn the_first_refund_is_what_marks_the_issue_undersubscribed() {
+    let result = refund(undersubscribed(IssueState::Subscribing, LOTS), LOTS);
+    let issue: Issue = decode(&result, &demo_issue());
+
+    assert_eq!(issue.state, IssueState::Failed);
+}
+
+/// Наступні повернення застають випуск уже позначеним і працюють так само:
+/// інвесторів наперед не обмежено, і кожен приходить своєю транзакцією.
+#[test]
+fn a_later_refund_finds_the_issue_already_failed_and_works_the_same() {
+    let others = 40_000_000;
+    let result = refund(undersubscribed(IssueState::Failed, others + LOTS), LOTS);
+
+    assert_eq!(token_balance(&result, &INVESTOR_USDC), LOTS);
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(issue.state, IssueState::Failed);
+    assert_eq!(issue.raised, others);
+}
+
+/// Повернення бере рівно частку того, хто прийшов. Гроші решти інвесторів
+/// лишаються у сховищі, а зібране, пропозиція бонду й баланс сховища меншають
+/// на одне й те саме число — розійдись вони, хтось із решти не добрав би свого.
+#[test]
+fn a_refund_takes_only_the_share_of_the_one_who_asks() {
+    let others = 2 * LOTS;
+    let result = refund(undersubscribed(IssueState::Failed, others + LOTS), LOTS);
+
+    assert_eq!(token_balance(&result, &INVESTOR_USDC), LOTS);
+    assert_eq!(token_balance(&result, &SUBSCRIPTION_VAULT), others);
+    assert_eq!(bond_supply(&result), others);
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(issue.raised, others);
+}
+
+/// Контракт із `subscribe`, узятий з обох боків: до `subscription_end_ts` можна
+/// вносити й не можна повертати, з `subscription_end_ts` — навпаки. Дві
+/// протилежні дії не діляться однією секундою, а зазор між ними був би вікном,
+/// у якому неможливо ані внести, ані повернути.
+#[test]
+fn a_refund_before_the_window_closed_is_refused() {
+    let closes_at = closed_at();
+
+    for now in [closes_at - 1, closes_at - DAY] {
+        at(now).process_and_validate_instruction(
+            &refund_ix(),
+            &refund_accounts(undersubscribed(IssueState::Subscribing, LOTS), LOTS),
+            &[custom(ClubError::SubscriptionWindowStillOpen)],
+        );
+    }
+
+    for now in [closes_at, closes_at + 1] {
+        at(now).process_and_validate_instruction(
+            &refund_ix(),
+            &refund_accounts(undersubscribed(IssueState::Subscribing, LOTS), LOTS),
+            &[Check::success()],
+        );
+    }
+}
+
+/// `FR-010`: зібраний повністю випуск недозібраним не є, і повернень не дає —
+/// гроші вже належать не інвесторам. Перевіряються обидва замки: чесний
+/// `Funded` і складений руками `Subscribing`, у якому номінал вибрано.
+#[test]
+fn a_fully_raised_issue_is_not_undersubscribed() {
+    let face = stored_issue(IssueState::Subscribing, 0).face;
+
+    for state in [IssueState::Funded, IssueState::Subscribing] {
+        refuse_refund(
+            undersubscribed(state, face),
+            LOTS,
+            custom(ClubError::IssueNotFailed),
+        );
+    }
+}
+
+/// Стан перевіряється **явно**, а не виводиться із сум. Випуск у погашенні під
+/// умову `raised < face` не підпадає й сам собою, тому кожен зі станів тут
+/// складений із недобраним номіналом: якби замка на стані не було, повернення
+/// пішло б зі сховища випуску, який уже платить власникам бондів.
+#[test]
+fn an_issue_past_the_subscription_stage_refuses_refunds() {
+    let face = stored_issue(IssueState::Subscribing, 0).face;
+
+    for state in [
+        IssueState::Funded,
+        IssueState::Repaying,
+        IssueState::PastDue,
+        IssueState::Repaid,
+    ] {
+        refuse_refund(
+            undersubscribed(state, face - LOTS),
+            LOTS,
+            custom(ClubError::IssueNotFailed),
+        );
+    }
+}
+
+/// Повертати нічого: бонду на рахунку немає. Без цього замка виклик пройшов би
+/// порожнім переказом і все одно позначив би випуск недозібраним.
+#[test]
+fn a_wallet_holding_no_bonds_has_nothing_to_refund() {
+    refuse_refund(
+        undersubscribed(IssueState::Subscribing, LOTS),
+        0,
+        custom(ClubError::NothingToRefund),
+    );
+}
+
+/// Сховище прибите до випуску через `has_one`. Ескроу погашення в цьому ж
+/// випуску виглядає цілком «своїм» — та сама валюта, та сама authority, — і
+/// саме на ньому помилитись найлегше.
+#[test]
+fn refund_refuses_an_escrow_that_is_not_the_subscription_one() {
+    let mut accounts = refund_accounts(undersubscribed(IssueState::Subscribing, LOTS), LOTS);
+    accounts[3] = (ESCROW_VAULT, usdc_account(demo_issue(), LOTS));
+
+    after_the_window().process_and_validate_instruction(
+        &refund_ix_with(ESCROW_VAULT),
+        &accounts,
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
+    );
+}
+
+/// Підпис дає право повернути **свій** внесок, а не спалити чужий бонд і не
+/// відправити гроші кудись. Обидва рахунки прибиті до підписанта.
+#[test]
+fn refund_refuses_token_accounts_of_somebody_else() {
+    for (key, account) in [
+        (INVESTOR_BOND, bond_account(OUTSIDER, LOTS)),
+        (INVESTOR_USDC, usdc_account(OUTSIDER, 0)),
+    ] {
+        let accounts = replacing(
+            &refund_accounts(undersubscribed(IssueState::Subscribing, LOTS), LOTS),
+            key,
+            account,
+        );
+
+        after_the_window().process_and_validate_instruction(
+            &refund_ix(),
+            &accounts,
+            &[anchor_err(
+                anchor_lang::error::ErrorCode::ConstraintTokenOwner,
+            )],
+        );
+    }
 }
