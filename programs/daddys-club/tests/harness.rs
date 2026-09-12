@@ -41,7 +41,9 @@ use {
         },
     },
     mollusk_svm::{
-        program::{keyed_account_for_system_program, loader_keys},
+        program::{
+            create_program_account_loader_v3, keyed_account_for_system_program, loader_keys,
+        },
         result::InstructionResult,
         Mollusk,
     },
@@ -445,6 +447,14 @@ pub fn system_program() -> (Pubkey, Account) {
 
 pub fn token_program() -> (Pubkey, Account) {
     mollusk_svm_programs_token::token2022::keyed_account()
+}
+
+/// Порожнє місце опційного акаунта Anchor. `None` подається program id тієї
+/// програми, яку кличуть: Anchor звіряє ключ у слоті з `program_id` і, якщо
+/// вони збіглися, не читає акаунт узагалі. Тобто «акаунта немає» — це не
+/// коротший список, а окремий ключ у повному.
+pub fn omitted() -> (Pubkey, Account) {
+    (club_id(), create_program_account_loader_v3(&club_id()))
 }
 
 /// Підміна одного акаунта в готовому наборі — так пишеться негативний тест:
