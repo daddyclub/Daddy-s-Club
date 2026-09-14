@@ -36,10 +36,11 @@ use {
     daddys_club::{
         instructions::{issue::EXTRA_METAS_SEED, protocol::ConfigParams},
         state::{
-            Issue, IssueState, ProtocolConfig, CONFIG_SEED, HOLDER_SEED, ISSUE_SEED, OFFER_SEED,
-            SOURCE_SEED,
+            Issue, IssueState, ProtocolConfig, RevenueSource, CONFIG_SEED, HOLDER_SEED, ISSUE_SEED,
+            OFFER_SEED, SOURCE_SEED,
         },
     },
+    demo_issuer::POOL_SEED,
     mollusk_svm::{
         program::{
             create_program_account_loader_v3, keyed_account_for_system_program, loader_keys,
@@ -88,6 +89,11 @@ pub const BOND_MINT: Pubkey = Pubkey::new_from_array([23u8; 32]);
 pub const SUBSCRIPTION_VAULT: Pubkey = Pubkey::new_from_array([33u8; 32]);
 pub const ESCROW_VAULT: Pubkey = Pubkey::new_from_array([34u8; 32]);
 
+/// Рахунок джерела revenue: сюди емітент кладе комісію, звідси `intercept`
+/// бере частку. Ключ довільний із тієї ж причини, що й у сховищ випуску —
+/// дерівацією він не заданий, а живе в самому `RevenueSource`.
+pub const SOURCE_VAULT: Pubkey = Pubkey::new_from_array([32u8; 32]);
+
 /// Нумерація демо-світу: у `ISSUER` одне джерело, під ним один випуск.
 pub const SOURCE_SEQ: u64 = 0;
 pub const ISSUE_SEQ: u64 = 0;
@@ -102,6 +108,16 @@ pub fn club_id() -> Pubkey {
 /// байткоду цієї програми такий виклик неможливо ані зробити, ані підробити.
 pub fn issuer_program_id() -> Pubkey {
     Pubkey::new_from_array(demo_issuer::ID.to_bytes())
+}
+
+/// PDA пулу референсного емітента — той самий ключ, який джерело записує собі
+/// в `authority`, і той, чий **підпис** автентифікує перехоплення (`FR-004`).
+///
+/// Деривується з програми, а не вигадується: на вигаданому ключі тести
+/// лишились би зеленими після зміни seeds у demo-емітенті, тобто перестали б
+/// вести туди, куди веде сам байткод.
+pub fn issuer_authority() -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[POOL_SEED], &issuer_program_id())
 }
 
 pub fn token_program_id() -> Pubkey {
@@ -282,6 +298,39 @@ pub fn stored_issue(state: IssueState, payout_index: u128) -> Issue {
     }
 }
 
+/// Випуск у погашенні: номінал зібрано, гроші видано, зобов'язання живе. Це
+/// єдиний стан, у якому перехоплення розщеплює потік, тому з нього починається
+/// кожен тест про гроші.
+pub fn repaying(repaid_total: u64, payout_index: u128) -> Issue {
+    let issue = stored_issue(IssueState::Repaying, payout_index);
+
+    Issue {
+        raised: issue.face,
+        repaid_total,
+        ..issue
+    }
+}
+
+/// Джерело в тому вигляді, в якому його лишає `register_source`: `authority` —
+/// PDA пулу демо-емітента, `vault` — рахунок, з якого йде частка.
+///
+/// Живе тут із другого споживача: перехоплення бере його з `tests/source.rs`,
+/// своп — з `tests/swap.rs`. Дві копії розійшлися б саме в `authority`, тобто в
+/// тому полі, на якому тримається вся автентифікація (`FR-004`).
+pub fn stored_source(active_issue: Option<Pubkey>, total_observed: u64) -> RevenueSource {
+    RevenueSource {
+        issuer: anchor_key(ISSUER),
+        authority: anchor_key(issuer_authority().0),
+        vault: anchor_key(SOURCE_VAULT),
+        first_seen_ts: NOW - 30 * DAY,
+        total_observed,
+        observed_before_issue: 0,
+        active_issue: active_issue.map(anchor_key),
+        seq: SOURCE_SEQ,
+        bump: source_pda(ISSUER, SOURCE_SEQ).1,
+    }
+}
+
 /// Гаманець із лампортами під оренду створюваних акаунтів.
 pub fn wallet() -> Account {
     Account::new(10_000_000_000, 0, &Pubkey::default())
@@ -318,22 +367,27 @@ pub fn decode<T: AccountDeserialize>(result: &InstructionResult, key: &Pubkey) -
     T::try_deserialize(&mut stored.data.as_slice()).expect("акаунт розбирається")
 }
 
-/// Мінт USDC. Розширень немає: розрахункова валюта — звичайний мінт, і гук на
-/// ній зробив би перевірки перехоплення оманливо простішими.
-pub fn usdc_mint(supply: u64) -> Account {
+/// Мінт без розширень. Гук стоїть лише на бонді: на розрахунковій валюті він
+/// зробив би перевірки перехоплення оманливо простішими.
+pub fn plain_mint(decimals: u8, supply: u64) -> Account {
     mollusk_svm_programs_token::token2022::create_account_for_mint(Mint {
         mint_authority: COption::None,
         supply,
-        decimals: USDC_DECIMALS,
+        decimals,
         is_initialized: true,
         freeze_authority: COption::None,
     })
 }
 
-/// USDC-рахунок: гаманець інвестора, сховище випуску, скарбниця протоколу.
-pub fn usdc_account(owner: Pubkey, amount: u64) -> Account {
+/// Мінт USDC.
+pub fn usdc_mint(supply: u64) -> Account {
+    plain_mint(USDC_DECIMALS, supply)
+}
+
+/// Рахунок у мінті без розширень.
+pub fn token_account(mint: Pubkey, owner: Pubkey, amount: u64) -> Account {
     mollusk_svm_programs_token::token2022::create_account_for_token_account(TokenAccount {
-        mint: USDC_MINT,
+        mint,
         owner,
         amount,
         delegate: COption::None,
@@ -342,6 +396,11 @@ pub fn usdc_account(owner: Pubkey, amount: u64) -> Account {
         delegated_amount: 0,
         close_authority: COption::None,
     })
+}
+
+/// USDC-рахунок: гаманець інвестора, сховище випуску, скарбниця протоколу.
+pub fn usdc_account(owner: Pubkey, amount: u64) -> Account {
+    token_account(USDC_MINT, owner, amount)
 }
 
 fn owned_by_token_program(data: Vec<u8>) -> Account {
@@ -449,12 +508,23 @@ pub fn token_program() -> (Pubkey, Account) {
     mollusk_svm_programs_token::token2022::keyed_account()
 }
 
+/// Акаунт програми. Потрібен у наборі щоразу, коли на програму хтось
+/// посилається: `Program<'info, _>` у списку акаунтів, ціль CPI, порожній слот
+/// опційного акаунта.
+pub fn program_account(program: Pubkey) -> (Pubkey, Account) {
+    (program, create_program_account_loader_v3(&program))
+}
+
 /// Порожнє місце опційного акаунта Anchor. `None` подається program id тієї
-/// програми, яку кличуть: Anchor звіряє ключ у слоті з `program_id` і, якщо
+/// програми, **яку кличуть**: Anchor звіряє ключ у слоті з `program_id` і, якщо
 /// вони збіглися, не читає акаунт узагалі. Тобто «акаунта немає» — це не
 /// коротший список, а окремий ключ у повному.
-pub fn omitted() -> (Pubkey, Account) {
-    (club_id(), create_program_account_loader_v3(&club_id()))
+///
+/// Параметр не для краси: у ланцюжку CPI програм дві, і слот, порожній для
+/// демо-емітента, несе його id, а не id ядра. Переплутати їх — це подати ядру
+/// акаунт, який воно спробує розібрати як випуск.
+pub fn omitted(callee: Pubkey) -> (Pubkey, Account) {
+    program_account(callee)
 }
 
 /// Підміна одного акаунта в готовому наборі — так пишеться негативний тест:
@@ -565,6 +635,13 @@ mod tests {
         assert_eq!(
             extra_metas_pda(BOND_MINT),
             Pubkey::find_program_address(&[b"extra-account-metas", BOND_MINT.as_ref()], &club_id())
+        );
+        // Seeds чужої програми, а пін той самий: цей ключ джерело записує собі
+        // в `authority`, тому його зміна відрізала б від погашення всі вже
+        // зареєстровані джерела (`FR-004`).
+        assert_eq!(
+            issuer_authority(),
+            Pubkey::find_program_address(&[b"pool"], &issuer_program_id())
         );
         assert_eq!(
             offer_pda(issue, INVESTOR, 5),

@@ -29,12 +29,6 @@ use {
     solana_program_error::ProgramError,
 };
 
-/// PDA програми-емітента, чий підпис прийматиме `intercept` (`FR-004`).
-/// Справжня деривація з'явиться разом із demo-емітентом; тут важливо лише, що
-/// це не гаманець, який реєструє джерело.
-const AUTHORITY: Pubkey = Pubkey::new_from_array([31u8; 32]);
-const SOURCE_VAULT: Pubkey = Pubkey::new_from_array([32u8; 32]);
-
 const SEQ: u64 = 0;
 
 fn register_ix(issuer: Pubkey, seq: u64) -> Instruction {
@@ -45,7 +39,7 @@ fn register_ix(issuer: Pubkey, seq: u64) -> Instruction {
             AccountMeta::new_readonly(config_pda().0, false),
             AccountMeta::new(source_pda(issuer, seq).0, false),
             AccountMeta::new(issuer, true),
-            AccountMeta::new_readonly(AUTHORITY, false),
+            AccountMeta::new_readonly(issuer_authority().0, false),
             AccountMeta::new_readonly(USDC_MINT, false),
             AccountMeta::new_readonly(SOURCE_VAULT, false),
             AccountMeta::new_readonly(system_program().0, false),
@@ -58,9 +52,9 @@ fn register_accounts(issuer: Pubkey, seq: u64) -> Vec<(Pubkey, Account)> {
         (config_pda().0, anchor_account(&stored_config())),
         (source_pda(issuer, seq).0, uninitialized()),
         (issuer, wallet()),
-        (AUTHORITY, wallet()),
+        (issuer_authority().0, wallet()),
         (USDC_MINT, usdc_mint(0)),
-        (SOURCE_VAULT, usdc_account(AUTHORITY, 0)),
+        (SOURCE_VAULT, usdc_account(issuer_authority().0, 0)),
         system_program(),
     ]
 }
@@ -82,7 +76,7 @@ fn register_source_records_who_may_deliver_revenue_and_where_it_lands() {
     let source: RevenueSource = decode(&result, &source_pda(ISSUER, SEQ).0);
 
     assert_eq!(source.issuer, anchor_key(ISSUER));
-    assert_eq!(source.authority, anchor_key(AUTHORITY));
+    assert_eq!(source.authority, anchor_key(issuer_authority().0));
     assert_eq!(source.vault, anchor_key(SOURCE_VAULT));
     assert_eq!(source.seq, SEQ);
     assert_eq!(source.bump, source_pda(ISSUER, SEQ).1);
@@ -120,7 +114,7 @@ fn register_source_refuses_to_register_the_same_source_twice() {
         source_pda(ISSUER, SEQ).0,
         anchor_account(&RevenueSource {
             issuer: anchor_key(ISSUER),
-            authority: anchor_key(AUTHORITY),
+            authority: anchor_key(issuer_authority().0),
             vault: anchor_key(SOURCE_VAULT),
             first_seen_ts: NOW - 30 * DAY,
             total_observed: 500_000,
@@ -184,7 +178,7 @@ fn register_source_refuses_a_vault_in_another_currency() {
     let mollusk = setup();
     let other_mint = Pubkey::new_from_array([99u8; 32]);
 
-    let mut foreign = usdc_account(AUTHORITY, 0);
+    let mut foreign = usdc_account(issuer_authority().0, 0);
     foreign.data[..32].copy_from_slice(other_mint.as_ref());
 
     mollusk.process_and_validate_instruction(
@@ -205,7 +199,7 @@ fn register_source_refuses_a_mint_that_is_not_the_protocol_currency() {
     let mut instruction = register_ix(ISSUER, SEQ);
     instruction.accounts[4] = AccountMeta::new_readonly(other_mint, false);
 
-    let mut foreign_vault = usdc_account(AUTHORITY, 0);
+    let mut foreign_vault = usdc_account(issuer_authority().0, 0);
     foreign_vault.data[..32].copy_from_slice(other_mint.as_ref());
 
     let mut accounts = replacing(&register_accounts(ISSUER, SEQ), SOURCE_VAULT, foreign_vault);
@@ -245,31 +239,6 @@ const VAULT_BALANCE: u64 = 10_000_000_000;
 /// `SCALE / face = 1e12 / 250e9 = 4`. Індекс рухається на `сума × 4`.
 const INDEX_PER_UNIT: u128 = 4;
 
-fn stored_source(active_issue: Option<Pubkey>, total_observed: u64) -> RevenueSource {
-    RevenueSource {
-        issuer: anchor_key(ISSUER),
-        authority: anchor_key(AUTHORITY),
-        vault: anchor_key(SOURCE_VAULT),
-        first_seen_ts: NOW - 30 * DAY,
-        total_observed,
-        observed_before_issue: 0,
-        active_issue: active_issue.map(anchor_key),
-        seq: SOURCE_SEQ,
-        bump: source_pda(ISSUER, SOURCE_SEQ).1,
-    }
-}
-
-/// Випуск у погашенні: номінал зібрано, гроші видано, зобов'язання живе.
-fn repaying(repaid_total: u64, payout_index: u128) -> Issue {
-    let issue = stored_issue(IssueState::Repaying, payout_index);
-
-    Issue {
-        raised: issue.face,
-        repaid_total,
-        ..issue
-    }
-}
-
 /// Опис виклику. Негативні тести переписують одне поле й лишають решту
 /// happy-path'ом — так у тесті видно рівно те, що відрізняється.
 struct Call {
@@ -283,7 +252,7 @@ struct Call {
 
 fn call() -> Call {
     Call {
-        authority: AUTHORITY,
+        authority: issuer_authority().0,
         signs: true,
         issue: Some(demo_issue()),
         vault: SOURCE_VAULT,
@@ -297,7 +266,11 @@ fn intercept_ix(c: Call) -> Instruction {
         Some(issue) => (issue, c.escrow, BOND_MINT),
         // Опційні акаунти подаються трійцею: випуску немає — немає ані його
         // сховища, ані його мінта.
-        None => (omitted().0, omitted().0, omitted().0),
+        None => (
+            omitted(club_id()).0,
+            omitted(club_id()).0,
+            omitted(club_id()).0,
+        ),
     };
 
     Instruction::new_with_bytes(
@@ -322,14 +295,17 @@ fn intercept_ix(c: Call) -> Instruction {
 fn intercept_accounts(source: RevenueSource, issue: Option<Issue>) -> Vec<(Pubkey, Account)> {
     let mut accounts = vec![
         (source_pda(ISSUER, SOURCE_SEQ).0, anchor_account(&source)),
-        (AUTHORITY, wallet()),
+        (issuer_authority().0, wallet()),
         (OUTSIDER, wallet()),
-        (SOURCE_VAULT, usdc_account(AUTHORITY, VAULT_BALANCE)),
+        (
+            SOURCE_VAULT,
+            usdc_account(issuer_authority().0, VAULT_BALANCE),
+        ),
         (ESCROW_VAULT, usdc_account(demo_issue(), 0)),
         (SUBSCRIPTION_VAULT, usdc_account(demo_issue(), 0)),
         (USDC_MINT, usdc_mint(1_000_000_000_000_000)),
         token_program(),
-        omitted(),
+        omitted(club_id()),
     ];
 
     match issue {
