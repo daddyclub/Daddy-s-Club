@@ -30,10 +30,17 @@
 //! Разом із поверненням тут живе й **лінивий** перехід випуску в `Failed`:
 //! окремої інструкції «закрити підписку» немає, бо стан на ланцюгу однаково
 //! лишається старим, доки хтось не надішле транзакцію.
+//!
+//! Четверта — виплата (`FR-015`, `FR-016`). Той самий чекпоінт, який відкрив
+//! `open_position`, тут нарешті працює: претензія — це різниця індексів,
+//! помножена на баланс, і сама виплата нічого не рахує наперед. Ескроу
+//! погашення з'являється в цьому файлі вперше й лише тут — підписка й
+//! повернення його не бачать, і це навмисно.
 
 use {
     crate::{
         errors::ClubError,
+        math,
         state::{HolderCheckpoint, Issue, IssueState, HOLDER_SEED, ISSUE_SEED},
     },
     anchor_lang::prelude::*,
@@ -372,6 +379,143 @@ pub fn refund(ctx: Context<Refund>) -> Result<()> {
     // Перший виклик і є тим, хто позначає випуск недозібраним (`FR-011`).
     // Наступні застають `Failed` і просто пишуть його вдруге.
     issue.state = IssueState::Failed;
+
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct Claim<'info> {
+    /// Індекс живе у випуску, і claim його **не рухає** — тому `mut` тут
+    /// немає. Обидва `has_one` не про зручність: сховище погашення й мінт
+    /// бонду — це рівно ті дві речі, підміна яких перетворила б виплату на
+    /// крадіжку. Перше називає, звідки беруться гроші, друге — чим міряється
+    /// частка.
+    #[account(has_one = escrow_vault, has_one = bond_mint)]
+    pub issue: Account<'info, Issue>,
+
+    /// Той самий резолв, що й у `subscribe`: seeds містять випуск і власника,
+    /// тому чужий облік у набір не сходиться, а невідкритий — не існує.
+    #[account(
+        mut,
+        seeds = [HOLDER_SEED, issue.key().as_ref(), owner.key().as_ref()],
+        bump = holder.bump,
+    )]
+    pub holder: Account<'info, HolderCheckpoint>,
+
+    /// `FR-016`: забирає власник, і підпис дає право забрати **своє**, а не
+    /// відправити чуже куди завгодно — рахунок призначення прибитий до нього ж.
+    pub owner: Signer<'info>,
+
+    #[account(mut, token::mint = usdc_mint, token::authority = owner)]
+    pub owner_usdc: InterfaceAccount<'info, TokenAccount>,
+
+    /// `FR-014`: сюди перехоплення складало частку, звідси вона й іде. Сховище
+    /// підписки в наборі відсутнє: гроші інвесторів і гроші на виплати не мають
+    /// ділити одну інструкцію.
+    #[account(mut, token::mint = usdc_mint)]
+    pub escrow_vault: InterfaceAccount<'info, TokenAccount>,
+
+    /// Баланс тут — це друга половина `FR-016`. Він читається **зараз**, і це
+    /// правильно рівно доти, доки кожна передача бонду лишає по собі чекпоінт
+    /// (`FR-017`): між двома чекпоінтами баланс не змінюється, тому «баланс за
+    /// період» і «баланс зараз» — одне й те саме число.
+    #[account(token::mint = bond_mint, token::authority = owner)]
+    pub owner_bond: InterfaceAccount<'info, TokenAccount>,
+
+    pub bond_mint: InterfaceAccount<'info, Mint>,
+
+    pub usdc_mint: InterfaceAccount<'info, Mint>,
+
+    pub token_program: Program<'info, Token2022>,
+}
+
+/// Виплата власникові (`FR-016`).
+///
+/// Кумулятивний індекс (`FR-015`) робить цю інструкцію дешевою і не залежною
+/// від кількості власників: перехоплення зрушило одне число у випуску, а хто
+/// саме й коли забере свою частку — його вже не обходить. Тому й черги немає:
+/// власник приходить у будь-який момент, а сума — це різниця індексів,
+/// помножена на його баланс.
+///
+/// **Стан випуску тут нічого не вирішує, і це навмисно.** `FR-016` каже «в
+/// будь-який момент», а найчастіший момент — саме після `Repaid`: зобов'язання
+/// закрите, гроші лежать у сховищі, і замок за станом не дав би їх забрати
+/// нікому. Відмовляють лише права, набір акаунтів і відсутність претензії.
+///
+/// **Поточний баланс замість історичного** — це контракт із `FR-017`, а не
+/// спрощення. Він тримається тим, що передати бонд повз облік неможливо: гук
+/// вбудований у сам мінт, тому кожна передача або зсуває чекпоінти обох сторін,
+/// або не відбувається взагалі. Сьогодні це виконано з запасом — `execute`
+/// з'явиться в T032, а доти Token-2022 не пропускає жодної передачі бонду. Той,
+/// хто писатиме T032, мусить цей контракт зберегти: клієнт, який зрушив баланс
+/// без чекпоінта, забере тут чужі гроші.
+///
+/// `accrued` — те, що гук нарахував при передачах; воно додається до претензії
+/// й обнуляється тут же. Тому власник, який продав увесь бонд, усе одно приходить
+/// сюди за нарахованим до продажу, і нульовий баланс претензії не скасовує.
+pub fn claim(ctx: Context<Claim>) -> Result<()> {
+    let issue = &ctx.accounts.issue;
+    let holder = &ctx.accounts.holder;
+
+    // Чекпоінт із майбутнього — це зіпсований облік, а не нульова претензія, і
+    // він має власне ім'я. `claimable` повернула б на ньому те саме `None`, що
+    // й на переповненні, а це дві різні аварії: одна означає «індекс поїхав
+    // назад», друга — «сума не влізла». Звести їх в один код означало б віддати
+    // найважчу діагностику одному номеру на двох.
+    require!(
+        holder.index_at_checkpoint <= issue.payout_index,
+        ClubError::CheckpointAheadOfIndex
+    );
+
+    // `FR-016`: різниця індексів × баланс, плюс нараховане гуком. Ділення вниз
+    // лишає залишок у сховищі — він не зникає, а дістається наступним claim'ам.
+    let amount = math::claimable(
+        issue.payout_index,
+        holder.index_at_checkpoint,
+        u128::from(ctx.accounts.owner_bond.amount),
+        u128::from(holder.accrued),
+    )
+    .ok_or(ClubError::MathOverflow)?;
+    let amount = u64::try_from(amount).map_err(|_| error!(ClubError::MathOverflow))?;
+
+    // Нульова виплата — це відмова, а не успішний переказ нуля: транзакція, яка
+    // нічого не переказала, але зрушила чекпоінт, виглядала б як виплата.
+    require!(amount > 0, ClubError::NothingToClaim);
+
+    let source = issue.source;
+    let seq = issue.seq.to_le_bytes();
+    let issue_signer: &[&[&[u8]]] = &[&[ISSUE_SEED, source.as_ref(), &seq, &[issue.bump]]];
+
+    transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            TransferChecked {
+                from: ctx.accounts.escrow_vault.to_account_info(),
+                mint: ctx.accounts.usdc_mint.to_account_info(),
+                to: ctx.accounts.owner_usdc.to_account_info(),
+                authority: ctx.accounts.issue.to_account_info(),
+            },
+            issue_signer,
+        ),
+        amount,
+        ctx.accounts.usdc_mint.decimals,
+    )?;
+
+    let claimed_total = u128::from(holder.claimed_total)
+        .checked_add(u128::from(amount))
+        .ok_or(ClubError::MathOverflow)?;
+    let claimed_total =
+        u64::try_from(claimed_total).map_err(|_| error!(ClubError::MathOverflow))?;
+
+    let index_at_checkpoint = issue.payout_index;
+
+    let holder = &mut ctx.accounts.holder;
+    // Чекпоінт переїжджає на сьогоднішній індекс цілком, разом із відкинутим
+    // при діленні залишком: `CLAUDE.md` називає ціну прямо — округлення завжди
+    // вниз, а решта лишається у сховищі.
+    holder.index_at_checkpoint = index_at_checkpoint;
+    holder.accrued = 0;
+    holder.claimed_total = claimed_total;
 
     Ok(())
 }

@@ -1,5 +1,5 @@
-//! `open_position` (`FR-038`), `subscribe` (`FR-008`…`FR-010`, `FR-013`) і
-//! `refund` (`FR-011`) на справжньому байткоді.
+//! `open_position` (`FR-038`), `subscribe` (`FR-008`…`FR-010`, `FR-013`),
+//! `refund` (`FR-011`) і `claim` (`FR-015`, `FR-016`) на справжньому байткоді.
 //!
 //! Головне, що доводить перша половина, — не «акаунт створився», а що створився
 //! **саме той** акаунт. Список акаунтів гука лежить у мінті з моменту
@@ -18,6 +18,13 @@
 //! величини, тільки в інший бік, плюс лінивий перехід у `Failed`. Стани тут
 //! складаються руками навмисно — інакше не показати, що замок на стані стоїть
 //! **явно**, а не виводиться з того, що номінал недобрано.
+//!
+//! Четверта — виплата (`FR-015`, `FR-016`). Її світ складається руками з тієї
+//! ж причини: щоб побачити, як власник забирає своє, потрібен випуск, у якому
+//! вже щось перехоплено, а привести його туди справжніми інструкціями означало
+//! б міряти одним тестом усе погашення. Числа підібрані так, щоб частку можна
+//! було перевірити в голові: 12 000 USDC у сховищі, 4% номіналу на руках,
+//! 480 USDC до виплати.
 //!
 //! Випуск тут подається вже створеним: `create_issue` перевірений у своєму
 //! файлі, а тягнути його сюди означало б міряти дві інструкції одним тестом.
@@ -951,4 +958,355 @@ fn refund_refuses_token_accounts_of_somebody_else() {
             )],
         );
     }
+}
+
+// ---- claim (`FR-015`, `FR-016`) ---------------------------------------------
+
+/// Другий власник у тому ж випуску: частка міряється балансом, і одного
+/// гаманця для цього замало.
+const BUYER_USDC: Pubkey = Pubkey::new_from_array([43u8; 32]);
+const BUYER_BOND: Pubkey = Pubkey::new_from_array([44u8; 32]);
+
+/// Великий баланс у сторонньому токені — те, чим найлегше видати себе за
+/// власника бонду.
+const FOREIGN_BALANCE: Pubkey = Pubkey::new_from_array([45u8; 32]);
+
+/// Скільки вже перехоплено у сховище погашення — 12 000 USDC.
+const PAID_IN: u64 = 12_000_000_000;
+
+/// Індекс, який лишає по собі це перехоплення: `PAID_IN * SCALE / face`, тобто
+/// `12e9 * 1e12 / 250e9`. Одиниця бонду дорівнює одиниці номіналу, тому
+/// пропозиція — це `face`.
+const INDEX: u128 = 48_000_000_000;
+
+/// Баланси двох власників: 10 000 і 5 000 одиниць номіналу з 250 000.
+const BALANCE: u64 = 10_000_000_000;
+const SMALL_BALANCE: u64 = 5_000_000_000;
+
+/// Що їм належить із `PAID_IN`: 4% і 2%.
+const CLAIM: u64 = 480_000_000;
+const SMALL_CLAIM: u64 = 240_000_000;
+
+/// Облік із рухом: чекпоінт там, де його лишив попередній claim, і нараховане
+/// гуком при передачах.
+fn holder_at(owner: Pubkey, index_at_checkpoint: u128, accrued: u64) -> HolderCheckpoint {
+    HolderCheckpoint {
+        index_at_checkpoint,
+        accrued,
+        ..stored_holder(owner)
+    }
+}
+
+fn claim_ix(owner: Pubkey, usdc: Pubkey, bond: Pubkey) -> Instruction {
+    claim_ix_with(
+        owner,
+        holder_pda(demo_issue(), owner).0,
+        usdc,
+        bond,
+        ESCROW_VAULT,
+    )
+}
+
+/// Той самий виклик із підміненим обліком або сховищем: підміняється не вміст
+/// акаунта, а те, який акаунт подали.
+fn claim_ix_with(
+    owner: Pubkey,
+    holder: Pubkey,
+    usdc: Pubkey,
+    bond: Pubkey,
+    escrow: Pubkey,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        club_id(),
+        &daddys_club::instruction::Claim {}.data(),
+        vec![
+            AccountMeta::new_readonly(demo_issue(), false),
+            AccountMeta::new(holder, false),
+            AccountMeta::new_readonly(owner, true),
+            AccountMeta::new(usdc, false),
+            AccountMeta::new(escrow, false),
+            AccountMeta::new_readonly(bond, false),
+            AccountMeta::new_readonly(BOND_MINT, false),
+            AccountMeta::new_readonly(USDC_MINT, false),
+            AccountMeta::new_readonly(token_program().0, false),
+        ],
+    )
+}
+
+/// Світ у погашенні: у сховищі лежить усе перехоплене, індекс зрушений на
+/// нього, обидва власники ще не забирали нічого. Сховище підписки лежить поруч
+/// навмисно — саме його найлегше подати замість ескроу погашення.
+fn claim_accounts(holder: HolderCheckpoint, balance: u64) -> Vec<(Pubkey, Account)> {
+    let issue = repaying(PAID_IN, INDEX);
+    let owner = Pubkey::new_from_array(holder.owner.to_bytes());
+
+    vec![
+        (demo_issue(), anchor_account(&issue)),
+        (holder_pda(demo_issue(), owner).0, anchor_account(&holder)),
+        (INVESTOR, wallet()),
+        (BUYER, wallet()),
+        (OUTSIDER, wallet()),
+        (INVESTOR_USDC, usdc_account(INVESTOR, 0)),
+        (INVESTOR_BOND, bond_account(INVESTOR, balance)),
+        (BUYER_USDC, usdc_account(BUYER, 0)),
+        (BUYER_BOND, bond_account(BUYER, SMALL_BALANCE)),
+        (ESCROW_VAULT, usdc_account(demo_issue(), PAID_IN)),
+        (SUBSCRIPTION_VAULT, usdc_account(demo_issue(), 0)),
+        (BOND_MINT, bond_mint(demo_issue(), issue.raised)),
+        (USDC_MINT, usdc_mint(1_000_000_000_000_000)),
+        token_program(),
+    ]
+}
+
+/// Прогін власника-інвестора на його звичайному балансі.
+fn claim(holder: HolderCheckpoint) -> InstructionResult {
+    setup().process_and_validate_instruction(
+        &claim_ix(INVESTOR, INVESTOR_USDC, INVESTOR_BOND),
+        &claim_accounts(holder, BALANCE),
+        &[Check::success()],
+    )
+}
+
+/// `FR-016`: сума — це різниця індексу від чекпоінта, помножена на баланс. Три
+/// величини перевіряються разом: те, що вони зійшлися поодинці, ще не означає,
+/// що вони зійшлися між собою.
+#[test]
+fn claim_pays_the_difference_between_the_index_and_the_checkpoint() {
+    let result = claim(holder_at(INVESTOR, 0, 0));
+
+    assert_eq!(token_balance(&result, &INVESTOR_USDC), CLAIM);
+    assert_eq!(
+        token_balance(&result, &ESCROW_VAULT),
+        PAID_IN - CLAIM,
+        "зі сховища пішло не рівно стільки, скільки прийшло власникові"
+    );
+
+    let holder: HolderCheckpoint = decode(&result, &holder_pda(demo_issue(), INVESTOR).0);
+    assert_eq!(holder.claimed_total, CLAIM);
+    assert_eq!(
+        holder.index_at_checkpoint, INDEX,
+        "чекпоінт не переїхав на сьогоднішній індекс"
+    );
+
+    // `FR-015`: індекс рухає перехоплення, а не виплата. Якби claim його
+    // зрушив, решта власників забрала б менше, ніж їм належить.
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(issue.payout_index, INDEX);
+    assert_eq!(issue.repaid_total, PAID_IN);
+}
+
+/// Чекпоінт і є тим, що робить другий виклик безплідним. Без нього та сама
+/// різниця індексів виплатилася б удруге — і сховище спорожніло б на власниках,
+/// які просто натиснули кнопку двічі.
+#[test]
+fn a_second_claim_in_a_row_has_nothing_left_to_pay() {
+    setup().process_and_validate_instruction(
+        &claim_ix(INVESTOR, INVESTOR_USDC, INVESTOR_BOND),
+        &claim_accounts(holder_at(INVESTOR, INDEX, 0), BALANCE),
+        &[custom(ClubError::NothingToClaim)],
+    );
+}
+
+/// Частка міряється балансом: удвічі менший бонд — удвічі менша виплата.
+#[test]
+fn what_each_holder_takes_is_proportional_to_the_bond_they_hold() {
+    let big = claim(holder_at(INVESTOR, 0, 0));
+    assert_eq!(token_balance(&big, &INVESTOR_USDC), CLAIM);
+
+    let small = setup().process_and_validate_instruction(
+        &claim_ix(BUYER, BUYER_USDC, BUYER_BOND),
+        &claim_accounts(holder_at(BUYER, 0, 0), BALANCE),
+        &[Check::success()],
+    );
+
+    assert_eq!(token_balance(&small, &BUYER_USDC), SMALL_CLAIM);
+    assert_eq!(SMALL_CLAIM * 2, CLAIM, "частка перестала бути пропорційною");
+}
+
+/// `FR-017` нараховує при передачі, `FR-016` це виплачує: продавши весь бонд,
+/// власник усе одно приходить по те, що заробив до продажу. Нульовий баланс
+/// претензії не скасовує, а нараховане обнуляється тут же — інакше його забрали
+/// б удруге.
+#[test]
+fn what_the_hook_accrued_is_paid_out_even_with_no_bond_left() {
+    let accrued = 77_000_000;
+    let result = setup().process_and_validate_instruction(
+        &claim_ix(INVESTOR, INVESTOR_USDC, INVESTOR_BOND),
+        &claim_accounts(holder_at(INVESTOR, INDEX, accrued), 0),
+        &[Check::success()],
+    );
+
+    assert_eq!(token_balance(&result, &INVESTOR_USDC), accrued);
+
+    let holder: HolderCheckpoint = decode(&result, &holder_pda(demo_issue(), INVESTOR).0);
+    assert_eq!(holder.accrued, 0, "нараховане лишилось і забереться вдруге");
+    assert_eq!(holder.claimed_total, accrued);
+}
+
+/// Нараховане додається до претензії, а не заміняє її: власник із бондом і з
+/// нарахованим забирає обидві частини одним викликом.
+#[test]
+fn the_accrued_is_added_to_the_index_claim_not_instead_of_it() {
+    let accrued = 1_000_000;
+    let result = claim(holder_at(INVESTOR, 0, accrued));
+
+    assert_eq!(token_balance(&result, &INVESTOR_USDC), CLAIM + accrued);
+}
+
+/// Округлення вниз доходить і сюди. Відкинутий залишок лишається у сховищі —
+/// він не зникає й не домальовується власникові, — але чекпоінт переїжджає
+/// цілком, і ця частка одиниці вже не його. Ціну названо в `CLAUDE.md`, і тест
+/// її показує, а не приховує.
+#[test]
+fn the_dust_of_the_division_stays_in_the_escrow() {
+    // Чекпоінт на одиницю вище нуля: різниця меншає на 1, і `1 × BALANCE /
+    // SCALE` = 0.01 — рівно те, що відкидається вниз.
+    let result = claim(holder_at(INVESTOR, 1, 0));
+
+    assert_eq!(token_balance(&result, &INVESTOR_USDC), CLAIM - 1);
+    assert_eq!(token_balance(&result, &ESCROW_VAULT), PAID_IN - CLAIM + 1);
+
+    let holder: HolderCheckpoint = decode(&result, &holder_pda(demo_issue(), INVESTOR).0);
+    assert_eq!(holder.index_at_checkpoint, INDEX);
+}
+
+/// `FR-016` каже «в будь-який момент», і найчастіший момент — саме після
+/// повного погашення: зобов'язання закрите, гроші лежать у сховищі. Замок за
+/// станом не дав би їх забрати нікому, тому тест прибиває саме **відсутність**
+/// політики — інакше вона тихо з'явиться в наступній задачі.
+#[test]
+fn a_repaid_issue_pays_out_like_any_other() {
+    for state in [
+        IssueState::Repaying,
+        IssueState::PastDue,
+        IssueState::Repaid,
+    ] {
+        let issue = Issue {
+            state,
+            ..repaying(PAID_IN, INDEX)
+        };
+        let accounts = replacing(
+            &claim_accounts(holder_at(INVESTOR, 0, 0), BALANCE),
+            demo_issue(),
+            anchor_account(&issue),
+        );
+
+        let result = setup().process_and_validate_instruction(
+            &claim_ix(INVESTOR, INVESTOR_USDC, INVESTOR_BOND),
+            &accounts,
+            &[Check::success()],
+        );
+
+        assert_eq!(token_balance(&result, &INVESTOR_USDC), CLAIM, "{state:?}");
+    }
+}
+
+/// Чекпоінт із майбутнього — це зіпсований облік, а не нульова претензія, і в
+/// нього є власне ім'я. Мовчазний нуль тут виглядав би як «нічого не належить»,
+/// хоча насправді індекс поїхав назад.
+#[test]
+fn a_checkpoint_ahead_of_the_index_is_named_not_silently_zero() {
+    setup().process_and_validate_instruction(
+        &claim_ix(INVESTOR, INVESTOR_USDC, INVESTOR_BOND),
+        &claim_accounts(holder_at(INVESTOR, INDEX + 1, 0), BALANCE),
+        &[custom(ClubError::CheckpointAheadOfIndex)],
+    );
+}
+
+/// Забирає власник, і чужий облік у набір не сходиться: seeds містять і випуск,
+/// і власника, тому підписати своїм ключем чужу претензію неможливо.
+#[test]
+fn nobody_claims_out_of_somebody_elses_ledger() {
+    setup().process_and_validate_instruction(
+        &claim_ix_with(
+            OUTSIDER,
+            holder_pda(demo_issue(), INVESTOR).0,
+            INVESTOR_USDC,
+            INVESTOR_BOND,
+            ESCROW_VAULT,
+        ),
+        &claim_accounts(holder_at(INVESTOR, 0, 0), BALANCE),
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintSeeds)],
+    );
+}
+
+/// У випуску два сховища на одній валюті й одній authority. Виплата йде рівно з
+/// того, яке названо у випуску: сховище підписки виглядає цілком «своїм», і
+/// саме на ньому помилитись найлегше — а в ньому лежать гроші інвесторів, ще не
+/// видані емітенту.
+#[test]
+fn the_payout_comes_out_of_the_escrow_this_issue_names() {
+    setup().process_and_validate_instruction(
+        &claim_ix_with(
+            INVESTOR,
+            holder_pda(demo_issue(), INVESTOR).0,
+            INVESTOR_USDC,
+            INVESTOR_BOND,
+            SUBSCRIPTION_VAULT,
+        ),
+        &claim_accounts(holder_at(INVESTOR, 0, 0), BALANCE),
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
+    );
+}
+
+/// Баланс міряється бондом **цього** випуску. Без цього замка будь-який токен
+/// із чужого мінта видавав би себе за частку у випуску, і сховище спорожніло б
+/// на балансі, який до нього не має стосунку.
+#[test]
+fn a_balance_in_another_mint_is_not_a_share_of_this_issue() {
+    let accounts = replacing(
+        &claim_accounts(holder_at(INVESTOR, 0, 0), BALANCE),
+        INVESTOR_BOND,
+        usdc_account(INVESTOR, BALANCE),
+    );
+
+    setup().process_and_validate_instruction(
+        &claim_ix(INVESTOR, INVESTOR_USDC, INVESTOR_BOND),
+        &accounts,
+        &[anchor_err(
+            anchor_lang::error::ErrorCode::ConstraintTokenMint,
+        )],
+    );
+}
+
+/// Гроші йдуть тому, хто підписав: рахунок призначення прибитий до власника.
+/// Інакше підпис давав би право відправити свою виплату куди завгодно — і
+/// перший же зіпсований клієнт відправив би її не туди.
+#[test]
+fn the_payout_lands_on_an_account_the_owner_answers_for() {
+    let accounts = replacing(
+        &claim_accounts(holder_at(INVESTOR, 0, 0), BALANCE),
+        INVESTOR_USDC,
+        usdc_account(OUTSIDER, 0),
+    );
+
+    setup().process_and_validate_instruction(
+        &claim_ix(INVESTOR, INVESTOR_USDC, INVESTOR_BOND),
+        &accounts,
+        &[anchor_err(
+            anchor_lang::error::ErrorCode::ConstraintTokenOwner,
+        )],
+    );
+}
+
+/// Мінт бонду прибитий до випуску, і це не формальність. Без цього замка набір
+/// зійшовся б сам із собою: власник подав би чужий мінт **разом** із рахунком у
+/// ньому, `token::mint` не побачив би розбіжності, і великий баланс у будь-якому
+/// сторонньому токені перетворився б на частку в цьому випуску.
+#[test]
+fn a_foreign_mint_cannot_stand_in_for_the_bond_of_this_issue() {
+    let mut instruction = claim_ix(INVESTOR, INVESTOR_USDC, INVESTOR_BOND);
+    // Слот 5 — рахунок, яким міряється баланс, слот 6 — мінт, з яким його
+    // звіряють. Підмінити треба обидва: у цьому й полягає атака.
+    instruction.accounts[5] = AccountMeta::new_readonly(FOREIGN_BALANCE, false);
+    instruction.accounts[6] = AccountMeta::new_readonly(USDC_MINT, false);
+
+    let mut accounts = claim_accounts(holder_at(INVESTOR, 0, 0), BALANCE);
+    accounts.push((FOREIGN_BALANCE, usdc_account(INVESTOR, BALANCE)));
+
+    setup().process_and_validate_instruction(
+        &instruction,
+        &accounts,
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
+    );
 }
