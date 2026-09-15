@@ -19,6 +19,7 @@
 use {
     crate::{
         errors::ClubError,
+        instructions::issue::credit_repayment,
         math,
         state::{Issue, IssueState, ProtocolConfig, RevenueSource, CONFIG_SEED, SOURCE_SEED},
     },
@@ -200,25 +201,10 @@ pub fn intercept(ctx: Context<Intercept>, amount: u64) -> Result<()> {
     let split = math::split_intercept(u128::from(amount), issue.pledge_bps, remaining)
         .ok_or(ClubError::MathOverflow)?;
 
-    // `FR-015`: одиниць бонду мусить бути ненульова кількість — інакше «виплата
-    // на одиницю» не визначена. У погашенні це виконано завжди (`raised == face`
-    // і пропозиція дорівнює зібраному), тому замок названий окремо: сплутати
-    // «нема на що ділити» з переповненням означало б віддати найважчу
-    // діагностику одному коду на двох.
-    require!(bond_mint.supply > 0, ClubError::ZeroBondSupply);
-    let payout_index = math::advance_index(
-        issue.payout_index,
-        split.to_escrow,
-        u128::from(bond_mint.supply),
-    )
-    .ok_or(ClubError::MathOverflow)?;
-
-    let repaid_total = u128::from(issue.repaid_total)
-        .checked_add(split.to_escrow)
-        .ok_or(ClubError::MathOverflow)?;
-    let repaid_total = u64::try_from(repaid_total).map_err(|_| error!(ClubError::MathOverflow))?;
-    let closes = repaid_total == issue.obligation_total;
-
+    // Пропозиція бонду знімається до переказу: після нього набір акаунтів уже
+    // позичений на запис. Це знаменник індексу — ним ділить спільне
+    // зарахування.
+    let bond_supply = bond_mint.supply;
     let to_escrow = u64::try_from(split.to_escrow).map_err(|_| error!(ClubError::MathOverflow))?;
 
     // Нульового переказу окремою гілкою не обходимо: він законний, а гілка
@@ -238,18 +224,12 @@ pub fn intercept(ctx: Context<Intercept>, amount: u64) -> Result<()> {
         ctx.accounts.usdc_mint.decimals,
     )?;
 
+    // Далі — те саме, що робить дострокове погашення на своєму внеску, і
+    // робиться воно тим самим кодом (`FR-015`, `FR-019`): індекс рухається,
+    // виплачене росте, і на повному погашенні випуск закривається — без
+    // окремої дії емітента.
     if let Some(issue) = ctx.accounts.issue.as_mut() {
-        issue.repaid_total = repaid_total;
-        // `FR-015`: рухається індекс, а не N переказів. Саме тому вартість
-        // обробки надходження не залежить від кількості власників (`SC-005`).
-        issue.payout_index = payout_index;
-        // `FR-019`: перехоплення припиняється в ту саму мить, коли виплачено
-        // повне зобов'язання, — і припиняє його цей рядок, а не окрема дія
-        // емітента. Наступні надходження знайдуть випуск у `Repaid` і пройдуть
-        // повз розщеплення цілими.
-        if closes {
-            issue.state = IssueState::Repaid;
-        }
+        credit_repayment(issue, to_escrow, bond_supply)?;
     }
 
     Ok(())

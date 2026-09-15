@@ -15,6 +15,13 @@
 //! видача дивиться на чотири величини одразу — що лишилось у сховищі підписки,
 //! скільки взяв протокол, скільки дійшло емітенту і в якому стані вийшов
 //! випуск: зійшлися вони поодинці — ще не значить, що зійшлися між собою.
+//!
+//! Третя — `prepay` (`FR-021`). Там випуск приходить уже в погашенні, і
+//! міряється в ньому те саме: скільки пішло з рахунку емітента, скільки прийшло
+//! в сховище погашення, куди зрушився індекс і в якому стані вийшов випуск.
+//! Головна перевірка вимоги — не сума, а те, що після внеску **перехоплення
+//! більше нічого не бере**: дострокове погашення звільняє потік, а не
+//! здешевлює борг, і саме цей прохід іде ланцюжком із двох інструкцій.
 
 #[path = "harness.rs"]
 mod harness;
@@ -777,5 +784,416 @@ fn the_proceeds_go_only_to_an_account_the_issuer_controls() {
         &[anchor_err(
             anchor_lang::error::ErrorCode::ConstraintTokenOwner,
         )],
+    );
+}
+
+// ---- prepay (`FR-021`) ------------------------------------------------------
+
+/// Мінт із чужою пропозицією. Ключ довільний: це такий самий бонд-мінт, лише
+/// не той, яким міряється цей випуск.
+const OTHER_BOND_MINT: Pubkey = Pubkey::new_from_array([45u8; 32]);
+
+/// На рахунку емітента лежить більше, ніж він винен: тести міряють, скільки
+/// пішло, а не скільки могло піти.
+const ISSUER_FUNDS: u64 = 300_000_000_000;
+
+/// Пропозиція бонду дорівнює номіналу, тому одиниця виплати рахується просто:
+/// `SCALE / face = 1e12 / 250e9 = 4`. Індекс рухається на `сума × 4`.
+const INDEX_PER_UNIT: u128 = 4;
+
+/// Купон картки M0: 250 000 USDC × 9.5%. Саме він не має зникнути від того, що
+/// емітент заплатив раніше.
+const COUPON: u64 = 23_750_000_000;
+
+/// Надходження, яким перевіряється звільнений потік, і те, що лежить на
+/// рахунку джерела до нього. Числа з фікстури `math.rs`:
+/// `pledged_share(1_070_000_000, 1_200) = 128_400_000` — рівно стільки
+/// відщепилось би, якби зобов'язання ще жило.
+const INFLOW: u64 = 1_070_000_000;
+const VAULT_BALANCE: u64 = 10_000_000_000;
+
+fn prepay_ix() -> Instruction {
+    prepay_ix_with(ISSUER, ISSUER_USDC, ESCROW_VAULT, BOND_MINT)
+}
+
+/// Той самий виклик із підміненим підписантом, рахунком, сховищем або мінтом:
+/// у цих випадках змінюється не вміст акаунта, а те, який акаунт подали.
+fn prepay_ix_with(
+    issuer: Pubkey,
+    issuer_usdc: Pubkey,
+    escrow_vault: Pubkey,
+    bond_mint: Pubkey,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        club_id(),
+        &daddys_club::instruction::Prepay {}.data(),
+        vec![
+            AccountMeta::new(demo_issue(), false),
+            // Джерело прибите до випуску через `has_one`, тому воно те саме
+            // навіть тоді, коли підписує хтось інший.
+            AccountMeta::new_readonly(source_key(ISSUER), false),
+            AccountMeta::new_readonly(issuer, true),
+            AccountMeta::new(issuer_usdc, false),
+            AccountMeta::new(escrow_vault, false),
+            AccountMeta::new_readonly(bond_mint, false),
+            AccountMeta::new_readonly(USDC_MINT, false),
+            AccountMeta::new_readonly(token_program().0, false),
+        ],
+    )
+}
+
+/// Світ на момент дострокового погашення: випуск у погашенні, сховище погашення
+/// порожнє — усе, що там опиниться, прийшло рівно звідси. Сховище підписки теж
+/// порожнє, і це не декорація: номінал пішов емітенту ще при видачі
+/// (`FR-012`), тому в наборі воно лежить лише як те, що найлегше подати
+/// замість ескроу.
+fn prepay_accounts(issue: Issue) -> Vec<(Pubkey, Account)> {
+    vec![
+        (demo_issue(), anchor_account(&issue)),
+        (
+            source_key(ISSUER),
+            anchor_account(&stored_source(ISSUER, Some(demo_issue()))),
+        ),
+        (ISSUER, wallet()),
+        (ISSUER_USDC, usdc_account(ISSUER, ISSUER_FUNDS)),
+        (ESCROW_VAULT, usdc_account(demo_issue(), 0)),
+        (SUBSCRIPTION_VAULT, usdc_account(demo_issue(), 0)),
+        (BOND_MINT, bond_mint(demo_issue(), issue.raised)),
+        (USDC_MINT, usdc_mint(1_000_000_000_000_000)),
+        token_program(),
+    ]
+}
+
+fn prepay(issue: Issue) -> mollusk_svm::result::InstructionResult {
+    setup().process_and_validate_instruction(
+        &prepay_ix(),
+        &prepay_accounts(issue),
+        &[Check::success()],
+    )
+}
+
+fn refuse_prepayment(issue: Issue, expected: Check<'_>) {
+    setup().process_and_validate_instruction(&prepay_ix(), &prepay_accounts(issue), &[expected]);
+}
+
+/// `FR-021`: залишок зобов'язання гаситься **одним внеском**. Суми інструкція
+/// не бере — скільки лишилось, знає випуск, і чотири величини перевіряються
+/// разом: те, що вони зійшлися поодинці, ще не означає, що вони зійшлися між
+/// собою.
+#[test]
+fn prepay_closes_the_whole_obligation_in_a_single_payment() {
+    let owed = repaying(0, 0).obligation_total;
+    let result = prepay(repaying(0, 0));
+
+    assert_eq!(token_balance(&result, &ESCROW_VAULT), owed);
+    assert_eq!(
+        token_balance(&result, &ISSUER_USDC),
+        ISSUER_FUNDS - owed,
+        "з рахунку емітента пішло не рівно стільки, скільки прийшло в ескроу"
+    );
+    assert_eq!(
+        token_balance(&result, &SUBSCRIPTION_VAULT),
+        0,
+        "дострокове погашення зачепило сховище підписки"
+    );
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(issue.repaid_total, owed);
+    assert_eq!(issue.state, IssueState::Repaid);
+}
+
+/// **Купон сплачується повністю — це і є `FR-021`.** Заплативши раніше,
+/// емітент не платить менше: зобов'язання зафіксоване при створенні (`FR-018`)
+/// і від швидкості погашення не залежить. Тому перехоплене й внесене разом
+/// дають номінал **плюс купон**, а не номінал.
+#[test]
+fn prepaying_early_does_not_discount_the_coupon() {
+    let intercepted = 100_000_000_000;
+    let owed = repaying(intercepted, 0).obligation_total;
+    let face = repaying(intercepted, 0).face;
+
+    let result = prepay(repaying(intercepted, 0));
+    let paid_now = token_balance(&result, &ESCROW_VAULT);
+
+    assert_eq!(paid_now, owed - intercepted, "внесено не залишок");
+    assert_eq!(
+        intercepted + paid_now,
+        face + COUPON,
+        "дострокове погашення здешевило борг"
+    );
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(issue.obligation_total, owed, "зобов'язання перерахували");
+    assert_eq!(issue.repaid_total, owed);
+}
+
+/// Гроші йдуть у те саме сховище й рухають той самий індекс, що й перехоплена
+/// частка (`FR-015`): власникові однаково, якими дверима зайшов його дохід.
+/// Індекс при цьому продовжується з місця, де його лишило перехоплення, а не
+/// починається з нуля.
+#[test]
+fn the_prepayment_moves_the_index_the_way_an_intercepted_fee_does() {
+    let intercepted = 100_000_000_000;
+    let already = 4_000_000_000;
+    let owed = repaying(intercepted, already).obligation_total;
+
+    let result = prepay(repaying(intercepted, already));
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(
+        issue.payout_index,
+        already + u128::from(owed - intercepted) * INDEX_PER_UNIT,
+        "індекс не зрушився від того місця, де стояв"
+    );
+    assert!(
+        result
+            .get_account(&holder_pda(demo_issue(), INVESTOR).0)
+            .is_none(),
+        "у зарахуванні бере участь облік власника"
+    );
+}
+
+/// `FR-021` наскрізь: дострокове погашення **звільняє потік**. Після внеску
+/// комісія емітента проходить перехоплення цілою — без окремої дії, без
+/// відмови й без другої транзакції, тим самим кодом, що й після останнього
+/// надходження (`FR-019`).
+#[test]
+fn prepaying_frees_the_flow_instead_of_discounting_the_debt() {
+    let owed = repaying(0, 0).obligation_total;
+
+    let mut accounts = prepay_accounts(repaying(0, 0));
+    accounts.push((AUTHORITY, wallet()));
+    accounts.push((SOURCE_VAULT, usdc_account(AUTHORITY, VAULT_BALANCE)));
+
+    let paid = prepay_ix();
+    let fee = intercept_ix();
+    let result = setup().process_and_validate_instruction_chain(
+        &[(&paid, &[Check::success()]), (&fee, &[Check::success()])],
+        &accounts,
+    );
+
+    assert_eq!(
+        token_balance(&result, &ESCROW_VAULT),
+        owed,
+        "перехоплення відщепило частку від уже погашеного випуску"
+    );
+    assert_eq!(
+        token_balance(&result, &SOURCE_VAULT),
+        VAULT_BALANCE,
+        "з рахунку джерела після погашення все одно пішли гроші"
+    );
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(issue.repaid_total, owed);
+    assert_eq!(issue.state, IssueState::Repaid);
+    assert_eq!(issue.payout_index, u128::from(owed) * INDEX_PER_UNIT);
+
+    // Потік звільнився, але джерело його бачить: історія (`FR-028`) міряє
+    // дохід, а не борг.
+    let source: RevenueSource = decode(&result, &source_key(ISSUER));
+    assert_eq!(source.total_observed, OBSERVED + INFLOW);
+}
+
+/// Виклик перехоплення для тесту вище. Підпис `AUTHORITY` тут ніщо не доводить
+/// — mollusk шанує `is_signer` у метаданих, — і доводити не мусить: справжній
+/// доказ походження доходу дає `tests/swap.rs` на байткоді демо-емітента.
+fn intercept_ix() -> Instruction {
+    Instruction::new_with_bytes(
+        club_id(),
+        &daddys_club::instruction::Intercept { amount: INFLOW }.data(),
+        vec![
+            AccountMeta::new(source_key(ISSUER), false),
+            AccountMeta::new_readonly(AUTHORITY, true),
+            AccountMeta::new(SOURCE_VAULT, false),
+            AccountMeta::new(demo_issue(), false),
+            AccountMeta::new(ESCROW_VAULT, false),
+            AccountMeta::new_readonly(BOND_MINT, false),
+            AccountMeta::new_readonly(USDC_MINT, false),
+            AccountMeta::new_readonly(token_program().0, false),
+        ],
+    )
+}
+
+/// `FR-022` пришвидшує погашення, а не змінює розмір боргу, і лишає
+/// простроченому випуску єдиний шлях — погаситись. Тому `PastDue` гаситься
+/// нарівні з `Repaying`: відмовити тут означало б замкнути прострочений випуск
+/// у перехопленні на стелі назавжди.
+#[test]
+fn an_overdue_issue_may_still_buy_its_way_out() {
+    let overdue = Issue {
+        state: IssueState::PastDue,
+        ..repaying(0, 0)
+    };
+    let owed = overdue.obligation_total;
+
+    let result = setup().process_and_validate_instruction(
+        &prepay_ix(),
+        &prepay_accounts(overdue),
+        &[Check::success()],
+    );
+
+    assert_eq!(token_balance(&result, &ESCROW_VAULT), owed);
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(issue.state, IssueState::Repaid);
+    assert_eq!(issue.repaid_total, owed);
+}
+
+/// Гасити можна лише те, що виникло: зобов'язання з'являється з видачею
+/// (`FR-012`), а в недозібраному випуску не з'явиться вже ніколи (`FR-011`).
+/// Це та відмова, яка після T023 лишилась без жодного місця, що її кидає, —
+/// перехоплення стан випуску не карає, бо воно фільтр, а не ворота.
+#[test]
+fn an_issue_with_no_obligation_yet_cannot_be_prepaid() {
+    for state in [
+        IssueState::Subscribing,
+        IssueState::Funded,
+        IssueState::Failed,
+    ] {
+        let issue = stored_issue(state, 0);
+
+        refuse_prepayment(
+            Issue {
+                raised: issue.face,
+                ..issue
+            },
+            custom(ClubError::IssueNotRepaying),
+        );
+    }
+}
+
+/// «Уже погашено» — окрема відмова, а не «не в погашенні»: на ланцюгу видно
+/// лише код, і емітент, який гасить удруге, мусить прочитати саме це.
+#[test]
+fn an_obligation_already_closed_is_not_paid_twice() {
+    let owed = repaying(0, 0).obligation_total;
+
+    refuse_prepayment(
+        Issue {
+            state: IssueState::Repaid,
+            ..repaying(owed, u128::from(owed) * INDEX_PER_UNIT)
+        },
+        custom(ClubError::ObligationAlreadyRepaid),
+    );
+}
+
+/// Другий замок на ту саму вимогу. У погашенні залишок ненульовий завжди —
+/// випуск закривається рівно на рівності, — тому стан складається руками.
+/// Без замка транзакція, яка не переказала нічого, вивела б випуск у `Repaid`:
+/// погашення, за яке ніхто не заплатив.
+#[test]
+fn a_repaying_issue_that_owes_nothing_is_already_repaid() {
+    let owed = repaying(0, 0).obligation_total;
+
+    refuse_prepayment(
+        repaying(owed, u128::from(owed) * INDEX_PER_UNIT),
+        custom(ClubError::ObligationAlreadyRepaid),
+    );
+}
+
+/// `FR-004`: емітента випуск не знає — його знає джерело. Чужий підпис не
+/// доходить до тіла інструкції взагалі.
+#[test]
+fn only_the_issuer_behind_the_source_may_prepay() {
+    let mut accounts = prepay_accounts(repaying(0, 0));
+    accounts[2] = (OUTSIDER, wallet());
+    accounts[3] = (ISSUER_USDC, usdc_account(OUTSIDER, ISSUER_FUNDS));
+
+    setup().process_and_validate_instruction(
+        &prepay_ix_with(OUTSIDER, ISSUER_USDC, ESCROW_VAULT, BOND_MINT),
+        &accounts,
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
+    );
+}
+
+/// Джерело в наборі — не формальність: `has_one = source` веде від випуску до
+/// того джерела, чий емітент має право гасити. Без нього право давало б **будь-яке**
+/// зареєстроване джерело, і чужий емітент зі своїм джерелом закривав би чужий
+/// випуск — не крадіжка, але й не те, що дозволяє `FR-021`.
+#[test]
+fn an_issue_is_prepaid_only_through_the_source_that_backs_it() {
+    let mut instruction = prepay_ix_with(OUTSIDER, ISSUER_USDC, ESCROW_VAULT, BOND_MINT);
+    instruction.accounts[1] = AccountMeta::new_readonly(source_key(OUTSIDER), false);
+
+    let mut accounts = prepay_accounts(repaying(0, 0));
+    accounts[1] = (
+        source_key(OUTSIDER),
+        anchor_account(&stored_source(OUTSIDER, Some(demo_issue()))),
+    );
+    accounts[2] = (OUTSIDER, wallet());
+    accounts[3] = (ISSUER_USDC, usdc_account(OUTSIDER, ISSUER_FUNDS));
+
+    setup().process_and_validate_instruction(
+        &instruction,
+        &accounts,
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
+    );
+}
+
+/// У випуску два сховища на одній валюті й одній authority. Внесок іде рівно в
+/// те, яке названо у випуску, — сховище підписки виглядає цілком «своїм», і
+/// саме на ньому помилитись найлегше.
+#[test]
+fn the_prepayment_goes_only_to_the_escrow_this_issue_names() {
+    setup().process_and_validate_instruction(
+        &prepay_ix_with(ISSUER, ISSUER_USDC, SUBSCRIPTION_VAULT, BOND_MINT),
+        &prepay_accounts(repaying(0, 0)),
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
+    );
+}
+
+/// `FR-021`: внесок робить сам емітент, зі свого рахунку. Підпис дає право
+/// віддати **своє**, а не право списати з чужого рахунку — і впирається це в
+/// іменоване обмеження, а не в безіменну відмову токен-програми.
+#[test]
+fn the_money_comes_only_from_an_account_the_issuer_controls() {
+    setup().process_and_validate_instruction(
+        &prepay_ix(),
+        &replacing(
+            &prepay_accounts(repaying(0, 0)),
+            ISSUER_USDC,
+            usdc_account(OUTSIDER, ISSUER_FUNDS),
+        ),
+        &[anchor_err(
+            anchor_lang::error::ErrorCode::ConstraintTokenOwner,
+        )],
+    );
+}
+
+/// `FR-015`: пропозиція бонду — знаменник індексу, тому мінт мусить бути тим,
+/// яким випуск міряє одиницю. Підміняється він **разом зі своїм ключем**:
+/// саме так виглядає справжня спроба, і саме її не побачило б жодне
+/// обмеження на вміст. Чужа пропозиція вдвічі більша — власники забрали б
+/// удвічі менше, ніж заплатив емітент.
+#[test]
+fn the_unit_of_payout_is_measured_by_the_mint_this_issue_names() {
+    let mut accounts = prepay_accounts(repaying(0, 0));
+    accounts.push((
+        OTHER_BOND_MINT,
+        bond_mint(demo_issue(), 2 * repaying(0, 0).face),
+    ));
+
+    setup().process_and_validate_instruction(
+        &prepay_ix_with(ISSUER, ISSUER_USDC, ESCROW_VAULT, OTHER_BOND_MINT),
+        &accounts,
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
+    );
+}
+
+/// Виплата на одиницю без одиниць не визначена, і відмова названа окремо від
+/// переповнення: сплутати «нема на що ділити» з «сума не влізла» означало б
+/// віддати найважчу діагностику одному коду на двох. Через саму програму в цей
+/// стан не потрапити — пропозиція дорівнює зібраному, — тому мінт складається
+/// руками.
+#[test]
+fn a_prepayment_with_no_bonds_in_circulation_is_refused() {
+    setup().process_and_validate_instruction(
+        &prepay_ix(),
+        &replacing(
+            &prepay_accounts(repaying(0, 0)),
+            BOND_MINT,
+            bond_mint(demo_issue(), 0),
+        ),
+        &[custom(ClubError::ZeroBondSupply)],
     );
 }
