@@ -1,0 +1,186 @@
+{
+  "criterion": "SC-002",
+  "cluster": "localnet",
+  "rpcUrl": "http://127.0.0.1:8899",
+  "samples": 20,
+  "budgetMs": 10000,
+  "swapAmountInUsdc": "100000",
+  "expectedStepUnits": "36000000",
+  "stepMismatches": 0,
+  "confirmedToCounterMs": {
+    "min": -0.5,
+    "median": -0.2,
+    "p95": 0.3,
+    "max": 0.4
+  },
+  "sentToCounterMs": {
+    "min": 389.2,
+    "median": 409.8,
+    "p95": 427.9,
+    "max": 429.9
+  },
+  "issue": "nqr1ypUST7z3jeTt2vewEnoKiw7NMQceL88CavTpQ6Z",
+  "takenAt": "2026-08-27T15:03:06.068Z",
+  "measurements": [
+    {
+      "index": 1,
+      "confirmedToCounterMs": -0.2,
+      "sentToCounterMs": 390.2,
+      "step": "36000000",
+      "slot": 2481,
+      "signature": "56wfP2oazWBQdDCEvLBeJ3UvzaFiZsgS2NxKzdZ1vKUxGp5bF7PDf6VwnvCT9gGhgquDXScoz6Nt2eAYf1Eqd9mt"
+    },
+    {
+      "index": 2,
+      "confirmedToCounterMs": 0.2,
+      "sentToCounterMs": 425.9,
+      "step": "36000000",
+      "slot": 2482,
+      "signature": "GPP6mYwFoQEj2r5kMy9xsp6rEM5EGZdCDiNPe663ZPfiFqP47bLaC3B6u6gcXGR3bxXf1UUELRekSAsg2688QLW"
+    },
+    {
+      "index": 3,
+      "confirmedToCounterMs": -0.3,
+      "sentToCounterMs": 411.5,
+      "step": "36000000",
+      "slot": 2483,
+      "signature": "42HQnzDRynrB7JjHRD64BX3xpdZD7sEaMApitNUDeenV7KQUUvgoG3fQGHtc1Aid5KbYsSBYPTXH92Z6FCZXfVGX"
+    },
+    {
+      "index": 4,
+      "confirmedToCounterMs": 0.3,
+      "sentToCounterMs": 409.2,
+      "step": "36000000",
+      "slot": 2484,
+      "signature": "2uZQoxeeExSfD8uuKJLXRg2mQXRj3zBARKWFGPBUbpa3hcsjwwpvUT2yaWcd8NvE6LEjY3PPCG2QRXMBhPg87syN"
+    },
+    {
+      "index": 5,
+      "confirmedToCounterMs": -0.3,
+      "sentToCounterMs": 410.2,
+      "step": "36000000",
+      "slot": 2485,
+      "signature": "5m7ZTYekphs537gCYYQQ2YMDZA4A8att9q79hquPMksQvHg7BME8DFUFvPT2ELxEu4amffNpoByKqtznGYsBQij8"
+    },
+    {
+      "index": 6,
+      "confirmedToCounterMs": 0.1,
+      "sentToCounterMs": 390.1,
+      "step": "36000000",
+      "slot": 2486,
+      "signature": "5JoKDwqQPd98Fsiz7Kd9gMGv5E6BQ1PkdKn9ShFCnvtvqGEFTrFeoRrEgTZW5iouHWtqgKVBFUjuK11DtCinK4zq"
+    },
+    {
+      "index": 7,
+      "confirmedToCounterMs": -0.5,
+      "sentToCounterMs": 429.9,
+      "step": "36000000",
+      "slot": 2487,
+      "signature": "2QMrUAdAB9mDUEyirFSjzEXYDREUYRLLRrM9ZBKuJRopjsdT3XgsakfUJgLn58HsoEEACKygV59yxatsU1zqdvkF"
+    },
+    {
+      "index": 8,
+      "confirmedToCounterMs": -0.3,
+      "sentToCounterMs": 410.4,
+      "step": "36000000",
+      "slot": 2488,
+      "signature": "2gNtDzNdF1U8NYPtbvnwnJP4CuZZSWTiH5S8jCxCcyY84CeeFs8AGQdjmu4ek4bJwbswdShvX8zcPCow73u8w6sb"
+    },
+    {
+      "index": 9,
+      "confirmedToCounterMs": -0.3,
+      "sentToCounterMs": 406.6,
+      "step": "36000000",
+      "slot": 2489,
+      "signature": "3uHbQdUKZng5Vzg8DebN3DgVm4NEBL5357ZJVc2QnanJUpCvp2PcZMTRRYgSzwvYkQyDM3rNEttKjJgdmJyP3dJv"
+    },
+    {
+      "index": 10,
+      "confirmedToCounterMs": 0.2,
+      "sentToCounterMs": 408.4,
+      "step": "36000000",
+      "slot": 2490,
+      "signature": "4Rwx4Xtc2X2kRPWg1ewHvM12YG7VMNMVCvQp4D1thdocT1EriKcM63b6JFTkoQH2bKh7tQrr5CeDKRMpCboGFSH3"
+    },
+    {
+      "index": 11,
+      "confirmedToCounterMs": -0.3,
+      "sentToCounterMs": 389.2,
+      "step": "36000000",
+      "slot": 2491,
+      "signature": "4aTq434useSzYWeBji5EWgy77tnG3obqho71718w6YqhRq2mKhsfdfhbY6ri276UYZkbCJHoTtg7cDZhJVjcmgWk"
+    },
+    {
+      "index": 12,
+      "confirmedToCounterMs": -0.2,
+      "sentToCounterMs": 426.4,
+      "step": "36000000",
+      "slot": 2492,
+      "signature": "RQvDBtp7ewYn5DP45cAwDXqXfc1aFxESAcyCaiBiWKENTnvfwXp6QGFCxNZrQDiK7SqBSVjJX1mhsjQ2MQqWgvh"
+    },
+    {
+      "index": 13,
+      "confirmedToCounterMs": -0.2,
+      "sentToCounterMs": 410.7,
+      "step": "36000000",
+      "slot": 2493,
+      "signature": "4Zw5qfPAdK9or1BtFeKwtT9rhd7aT4F6Xnn57heDz1hDC6nxjtVBgUhJiuv7iXWjFJBwFUbjnuV31E7e6q2ixF4Z"
+    },
+    {
+      "index": 14,
+      "confirmedToCounterMs": -0.2,
+      "sentToCounterMs": 408.9,
+      "step": "36000000",
+      "slot": 2494,
+      "signature": "2aTSC8yfdnZFwe9zS5EBLncavhyzD1eDUbTv4qdCKqTByzgveqPA89Ci6vpJu9E2oSkqEJpMjAXQdW1XzxBz7jhN"
+    },
+    {
+      "index": 15,
+      "confirmedToCounterMs": 0.4,
+      "sentToCounterMs": 410.5,
+      "step": "36000000",
+      "slot": 2495,
+      "signature": "252kEeHFjoBoMvawixWQ4bjoYVXVvEzYjMVZNjQzaNBn2HEqmn9Le4VQQ3ggFw8pdx7sLjX9SDRVAUDpHMveovJX"
+    },
+    {
+      "index": 16,
+      "confirmedToCounterMs": -0.2,
+      "sentToCounterMs": 390,
+      "step": "36000000",
+      "slot": 2496,
+      "signature": "ueR5xBPE5r4TNUD9pkLPvZ3Lb19g2mGSMWqrMUHTPs3yoQTtygVpGqdrevqtHRaGfivwPZkxJcCcxbueu3rsddw"
+    },
+    {
+      "index": 17,
+      "confirmedToCounterMs": -0.2,
+      "sentToCounterMs": 427.9,
+      "step": "36000000",
+      "slot": 2497,
+      "signature": "4FXhdYzsRGS4RLYp6t38fponvG4wzDn97hk5ZhGNyDpSyND9PZYWRXHWypCseQx4i6mmG2CYDt26PpadXoUKzDqA"
+    },
+    {
+      "index": 18,
+      "confirmedToCounterMs": 0.1,
+      "sentToCounterMs": 408.6,
+      "step": "36000000",
+      "slot": 2498,
+      "signature": "2XniKxwweXXhsntvQFtvmnhBEMTyP2ZCgnsCnRk4GLwS5PFgxk1d6SYtZnNDyWY6HvsxWtdTvbH9uS2aaz9w6WcT"
+    },
+    {
+      "index": 19,
+      "confirmedToCounterMs": -0.3,
+      "sentToCounterMs": 409.9,
+      "step": "36000000",
+      "slot": 2499,
+      "signature": "4CJMDukfCzYZvTGr8ppEgm8akTsqiHPWJ8T5qU5UUcEfWDEaj2dV5zWur8nLJoAvnW8faLvfNuY7cKdFBKGGcCrN"
+    },
+    {
+      "index": 20,
+      "confirmedToCounterMs": 0.1,
+      "sentToCounterMs": 409.8,
+      "step": "36000000",
+      "slot": 2500,
+      "signature": "5tB1SvDfvdr1e4F1wJdPRRMFdFztRmhxXpA5Lggiqqtf9SQDHVCBtA1rvJJojMtqXm6mWfA6dMqGtvCGHNwiuExL"
+    }
+  ]
+}

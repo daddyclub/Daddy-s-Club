@@ -8,6 +8,7 @@ const NAV = [
   { to: '/', label: 'Marketplace', end: true },
   { to: '/issue/quillfin-swap', label: 'Issue detail', end: false },
   { to: '/issuer/quillfin-swap', label: 'Issuer desk', end: false },
+  { to: '/live/issue', label: 'Live issue', end: false },
 ];
 
 const Header = () => {

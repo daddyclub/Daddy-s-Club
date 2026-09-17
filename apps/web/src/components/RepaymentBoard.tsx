@@ -7,9 +7,15 @@ interface RepaymentBoardProps {
   totalOwed: number;
   settled: boolean;
   caption: string;
+  /**
+   * Підпис частки. За замовчуванням — власний розрахунок дошки з одним знаком;
+   * живий екран передає сюди частку, пораховану в `bigint`, щоб на картці не
+   * стояли поруч два різні числа про одне й те саме.
+   */
+  pctLabel?: string;
 }
 
-const RepaymentBoard = ({ repaid, totalOwed, settled, caption }: RepaymentBoardProps) => {
+const RepaymentBoard = ({ repaid, totalOwed, settled, caption, pctLabel }: RepaymentBoardProps) => {
   const remaining = Math.max(0, totalOwed - repaid);
   const pct = (repaid / totalOwed) * 100;
 
@@ -48,7 +54,7 @@ const RepaymentBoard = ({ repaid, totalOwed, settled, caption }: RepaymentBoardP
           <ProgressBar pct={pct} tone={settled ? 'ink' : 'accent'} height={10} />
           <div className="mt-2 flex flex-wrap justify-between gap-3 text-[11px] uppercase tracking-[0.16em] text-board-dim">
             <span>{caption}</span>
-            <span>{percent(pct)} of obligation</span>
+            <span>{pctLabel ?? percent(pct)} of obligation</span>
           </div>
         </div>
         <div className="flex gap-8 md:justify-end">
