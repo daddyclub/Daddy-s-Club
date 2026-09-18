@@ -6,11 +6,13 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "measure:sc002": "node src/measure-sc002.ts"
+    "measure:sc002": "node src/measure-sc002.ts",
+    "demo": "node src/demo.ts"
   },
   "dependencies": {
     "@daddys-club/sdk": "workspace:^",
-    "@solana/web3.js": "^1.98.4"
+    "@solana/web3.js": "^1.98.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "typescript": "^5.9.0",
