@@ -4,6 +4,15 @@
 //! з'являються, а вимога без помилки означає, що правило нікому не відмовляє —
 //! і те, і те має бути видно оком при читанні цього файлу.
 //!
+//! Невживані варіанти тут є, і кожен із них зарезервований під **названу**
+//! задачу: `NotTransferring`, `RecipientPositionMissing` і `IssueMismatch` —
+//! під `execute` (`T032`), три помилки оферти — під вторинку (`T034`…`T036`),
+//! `InsufficientRevenueHistory` — під поріг допуску (`T040`), `IssueNotMatured`
+//! — під past due (`T042`). Ознака резерву — вимога в докстрінгу: варіант без
+//! вимоги і без ловця це не резерв, а сміття. Три таких прибрано на закритті M1
+//! (`PositionNotOpen`, `PledgeExceedsInflow`, `NotImplemented`) — одним заходом,
+//! бо кожне видалення зсуває коди наступних.
+//!
 //! Порядок оголошення визначає числові коди: Anchor нумерує варіанти від
 //! `ERROR_CODE_OFFSET`. Поки програму не задеплоєно, порядок вільний; після
 //! першого деплою варіанти можна лише **дописувати в кінець**, інакше в клієнта
@@ -79,20 +88,6 @@ pub enum ClubError {
     /// вичерпує залишок, тому це не «перепідписка», а внесок після повного збору.
     #[msg("Issue is fully subscribed")]
     IssueFullySubscribed,
-
-    /// `FR-038`: облік за випуском має бути відкритий до того, як з'являться
-    /// бонд-токени.
-    ///
-    /// **Ніхто її не кидає, і це навмисно.** Відмовляє замість неї Anchor:
-    /// `holder` у `subscribe` — це `Account<HolderCheckpoint>` на seeds випуску
-    /// й підписанта, тому невідкритий облік упирається в
-    /// `AccountNotInitialized` ще до тіла інструкції. Права стережуть
-    /// обмеження, а не `require!` — переписати це на перевірку в тілі означало
-    /// б проміняти типобезпеку на текст повідомлення. Варіант лишається до
-    /// прибирання невживаних на закритті M1, разом із `NotImplemented`:
-    /// видалення зсуває коди всіх наступних, і робити це варто один раз.
-    #[msg("No position is open for this wallet on this issue")]
-    PositionNotOpen,
 
     // ---- Закриття, видача і повернення ----
     /// `FR-010`, `FR-012`: номінал доступний емітенту лише при повному зборі.
@@ -188,16 +183,6 @@ pub enum ClubError {
     /// Чекпоінт не може випереджати індекс: це зіпсований облік, а не нуль.
     #[msg("Checkpoint is ahead of the payout index")]
     CheckpointAheadOfIndex,
-
-    /// Частка перехоплення понад 100% надходження.
-    #[msg("Pledged share exceeds the inflow")]
-    PledgeExceedsInflow,
-
-    // ---- Тимчасове ----
-    // Стоїть останнім навмисно: заглушки в lib.rs зникають разом із Фазою 2,
-    // і видалення варіанта з кінця нікому не зсуває коди.
-    #[msg("Instruction is not implemented yet")]
-    NotImplemented,
 }
 
 #[cfg(test)]
@@ -224,7 +209,6 @@ mod tests {
         ClubError::SubscriptionWindowClosed,
         ClubError::BelowMinimumLot,
         ClubError::IssueFullySubscribed,
-        ClubError::PositionNotOpen,
         ClubError::IssueNotFunded,
         ClubError::ProceedsAlreadyWithdrawn,
         ClubError::IssueNotFailed,
@@ -245,8 +229,6 @@ mod tests {
         ClubError::MathOverflow,
         ClubError::ZeroBondSupply,
         ClubError::CheckpointAheadOfIndex,
-        ClubError::PledgeExceedsInflow,
-        ClubError::NotImplemented,
     ];
 
     #[test]
