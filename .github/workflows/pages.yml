@@ -1,0 +1,71 @@
+# Builds apps/web and publishes it to GitHub Pages.
+#
+# The site lives under https://<owner>.github.io/<repo>/, so the bundle is
+# built with `--base=/<repo>/` and the router takes the same prefix from
+# `import.meta.env.BASE_URL`. Pages knows nothing about client-side routes:
+# `404.html` is a copy of `index.html`, so a deep link is served the app and
+# the router picks the route up from the URL.
+#
+# Repository variables (Settings → Secrets and variables → Actions → Variables)
+# configure the cluster the live screen reads from. They are public by nature:
+# whatever is baked into a static bundle is visible to every visitor, so an RPC
+# key must be one restricted to this site's origin. Left unset, the bundle
+# falls back to a local validator, and only the `/live/issue` screen is affected.
+#
+# One-time setup by the repository owner: Settings → Pages → Source: GitHub Actions.
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the pnpm version from `packageManager` in package.json.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm --filter @daddys-club/web build --base=/${{ github.event.repository.name }}/
+        env:
+          VITE_RPC_URL: ${{ vars.VITE_RPC_URL }}
+          VITE_CLUSTER: ${{ vars.VITE_CLUSTER }}
+          VITE_PROGRAM_ID: ${{ vars.VITE_PROGRAM_ID }}
+
+      - run: cp apps/web/dist/index.html apps/web/dist/404.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

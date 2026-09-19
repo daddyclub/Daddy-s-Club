@@ -79,6 +79,22 @@ To see the whole cycle end to end — a local validator with both programs, the
 demo issuer generating fees, holders getting paid — see
 [scripts/README.md](scripts/README.md).
 
+## Deployment
+
+The web app is published to GitHub Pages by
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) on every push to
+`main`. One-time setup for the repository owner: **Settings → Pages → Source:
+GitHub Actions**. The bundle is built with `--base=/<repo>/`, and the router
+takes the same prefix from `import.meta.env.BASE_URL`, so the site works at
+`https://<owner>.github.io/<repo>/`.
+
+The demo screens run on built-in figures and need no configuration. The live
+screen (`/live/issue`) reads the cluster set in repository variables
+`VITE_RPC_URL`, `VITE_CLUSTER` and `VITE_PROGRAM_ID` (Settings → Secrets and
+variables → Actions → Variables). They end up in a public bundle, so an RPC
+key placed there must be restricted to the site's origin. Until the programs
+are deployed to a public cluster, leave them unset.
+
 ## License
 
 MIT
