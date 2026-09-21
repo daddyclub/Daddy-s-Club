@@ -1,4 +1,7 @@
-use anchor_lang::prelude::*;
+use {
+    anchor_lang::prelude::*, spl_discriminator::SplDiscriminate,
+    spl_transfer_hook_interface::instruction::ExecuteInstruction,
+};
 
 declare_id!("7eT5T7mq1uD9piYJ2rMAzma8iYL7C7CZGPgxsB8DckoB");
 
@@ -97,5 +100,18 @@ pub mod daddys_club {
     /// припиняється саме собою на повному погашенні (`FR-019`).
     pub fn intercept(ctx: Context<Intercept>, amount: u64) -> Result<()> {
         instructions::source::intercept(ctx, amount)
+    }
+
+    /// Облік при передачі бонду (`FR-017`, `FR-038`). Кличе **лише
+    /// Token-2022** — зсередини кожного переказу бонду, після переміщення
+    /// токенів: обом сторонам нараховується станом на момент перед передачею,
+    /// і чекпоінти обох переїжджають на сьогоднішній індекс. Дискримінатор —
+    /// не наш, а інтерфейсу гука: саме під ним Token-2022 шле виклик, і
+    /// байти беруться з самого інтерфейсу, а не переписуються. Прямий виклик
+    /// відмовляє на прапорці `transferring`, передача на гаманець без
+    /// відкритого обліку — на відсутньому чекпоінті отримувача.
+    #[instruction(discriminator = ExecuteInstruction::SPL_DISCRIMINATOR_SLICE)]
+    pub fn execute(ctx: Context<Execute>, amount: u64) -> Result<()> {
+        instructions::hook::execute(ctx, amount)
     }
 }

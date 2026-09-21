@@ -32,8 +32,8 @@ What ships:
 
 What does not exist yet:
 
-- a secondary market — offers, bond transfers with checkpoints, the transfer
-  hook's `execute` path; the bond mint already carries the hook;
+- a secondary market — offers and the web flow around them; bond transfers
+  already settle both sides' checkpoints through the transfer hook;
 - an admission threshold — in this version anyone can create an issue;
 - signing transactions from the web app.
 

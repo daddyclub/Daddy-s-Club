@@ -5,13 +5,16 @@
 //! і те, і те має бути видно оком при читанні цього файлу.
 //!
 //! Невживані варіанти тут є, і кожен із них зарезервований під **названу**
-//! задачу: `NotTransferring`, `RecipientPositionMissing` і `IssueMismatch` —
-//! під `execute` (`T032`), три помилки оферти — під вторинку (`T034`…`T036`),
+//! задачу: три помилки оферти — під вторинку (`T034`…`T036`),
 //! `InsufficientRevenueHistory` — під поріг допуску (`T040`), `IssueNotMatured`
 //! — під past due (`T042`). Ознака резерву — вимога в докстрінгу: варіант без
 //! вимоги і без ловця це не резерв, а сміття. Три таких прибрано на закритті M1
 //! (`PositionNotOpen`, `PledgeExceedsInflow`, `NotImplemented`) — одним заходом,
-//! бо кожне видалення зсуває коди наступних.
+//! бо кожне видалення зсуває коди наступних. Ще два — на `T032`:
+//! `RecipientPositionMissing` і `IssueMismatch` були зарезервовані під
+//! `execute`, але обидві відмови там стережуть Anchor-обмеження й кидають
+//! власні коди (`AccountNotInitialized`, `ConstraintSeeds`/`ConstraintHasOne`),
+//! а ловця з нашим ім'ям для них не існує.
 //!
 //! Порядок оголошення визначає числові коди: Anchor нумерує варіанти від
 //! `ERROR_CODE_OFFSET`. Поки програму не задеплоєно, порядок вільний; після
@@ -141,20 +144,13 @@ pub enum ClubError {
     #[msg("Nothing to claim")]
     NothingToClaim,
 
-    /// `FR-016`: облік належить іншому випуску, ніж той, з якого забирають.
-    #[msg("Account belongs to a different issue")]
-    IssueMismatch,
-
     // ---- Гук і передача ----
     /// `FR-017`: гук можна покликати напряму, повз Token-2022. Без цієї
-    /// перевірки чекпоінти зрушувались би без переказу.
+    /// перевірки чекпоінти зрушувались би без переказу. Відмову `FR-038` —
+    /// передача на гаманець без обліку — власного імені не має: чекпоінта
+    /// отримувача просто не існує, і це каже сам Anchor.
     #[msg("Hook was invoked outside a token transfer")]
     NotTransferring,
-
-    /// `FR-038`: передача на гаманець без відкритого обліку відхиляється цілком,
-    /// замість того щоб пройти й зіпсувати облік.
-    #[msg("Recipient has no open position for this issue")]
-    RecipientPositionMissing,
 
     // ---- Вторинний ринок ----
     /// `FR-024`: ціну і кількість задає продавець; нульових оферт не буває.
@@ -220,9 +216,7 @@ mod tests {
         ClubError::ObligationAlreadyRepaid,
         ClubError::IssueNotMatured,
         ClubError::NothingToClaim,
-        ClubError::IssueMismatch,
         ClubError::NotTransferring,
-        ClubError::RecipientPositionMissing,
         ClubError::OfferTermsInvalid,
         ClubError::OfferNotActive,
         ClubError::InsufficientBondBalance,

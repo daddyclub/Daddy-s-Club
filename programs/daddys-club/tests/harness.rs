@@ -34,7 +34,10 @@ use {
         state::{Account as HookTokenAccount, AccountState as HookAccountState, Mint as HookMint},
     },
     daddys_club::{
-        instructions::{issue::EXTRA_METAS_SEED, protocol::ConfigParams},
+        instructions::{
+            issue::{hook_account_metas, EXTRA_ACCOUNT_METAS, EXTRA_METAS_SEED},
+            protocol::ConfigParams,
+        },
         state::{
             Issue, IssueState, ProtocolConfig, RevenueSource, CONFIG_SEED, HOLDER_SEED, ISSUE_SEED,
             OFFER_SEED, SOURCE_SEED,
@@ -53,7 +56,9 @@ use {
     solana_program_option::COption,
     solana_rent::Rent,
     solana_svm_log_collector::LogCollector,
+    spl_tlv_account_resolution::state::ExtraAccountMetaList,
     spl_token_interface::state::{Account as TokenAccount, AccountState, Mint},
+    spl_transfer_hook_interface::instruction::ExecuteInstruction,
     std::{cell::RefCell, path::Path, rc::Rc, sync::Once},
 };
 
@@ -484,6 +489,28 @@ pub fn bond_account(owner: Pubkey, amount: u64) -> Account {
     }
 
     owned_by_token_program(data)
+}
+
+/// Список додаткових акаунтів гука в тому вигляді, в якому його лишає
+/// `create_issue`: TLV на три мети з `hook_account_metas`, власник — ядро.
+///
+/// Без нього Token-2022 покликав би `execute` з чотирма обов'язковими
+/// акаунтами, і гук упав би на нестачі акаунтів, а не на обліку. Тобто
+/// передача бонду в тесті починається саме звідси.
+pub fn extra_metas_account() -> Account {
+    let metas = hook_account_metas(&anchor_key(demo_issue())).expect("список гука будується");
+    let len = ExtraAccountMetaList::size_of(EXTRA_ACCOUNT_METAS).expect("розмір списку рахується");
+    let mut data = vec![0u8; len];
+    ExtraAccountMetaList::init::<ExecuteInstruction>(&mut data, &metas)
+        .expect("список ініціалізується");
+
+    Account {
+        lamports: Rent::default().minimum_balance(data.len()),
+        data,
+        owner: club_id(),
+        executable: false,
+        rent_epoch: 0,
+    }
 }
 
 /// Баланс токен-акаунта з результату — однаково для USDC і для бонду:
