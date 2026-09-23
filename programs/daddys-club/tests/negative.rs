@@ -25,6 +25,11 @@
 //!   випуску**. Це та сама діра, яку сесія 13 знайшла мутацією в `prepay`
 //!   (`has_one = source`); у `withdraw_proceeds` і в `claim` вона досі не
 //!   перевірена.
+//! - **Гук, покликаний напряму.** `tests/hook.rs` ганяє `execute` лише
+//!   зсередини справжнього `transfer_checked` — тобто перевіряє, що гук рахує
+//!   правильно, коли переказ **є**. Протилежного питання — що буде, коли
+//!   виклик є, а переказу немає, — там немає, а це найдешевша атака в
+//!   протоколі: грошей не рухається, а облік переписується.
 //! - **Пропозиція бонду після заморозки умов** (`FR-013`). Що мінтом володіє
 //!   PDA випуску, `tests/issue.rs` показує на створенні; що з цього випливає —
 //!   не показує ніде.
@@ -57,12 +62,17 @@ use {
     anchor_lang::{solana_program::program_option::COption as HookCOption, InstructionData},
     anchor_spl::token_2022::spl_token_2022::{
         error::TokenError,
-        extension::StateWithExtensions,
+        extension::{
+            transfer_hook::TransferHookAccount, BaseStateWithExtensionsMut, StateWithExtensions,
+            StateWithExtensionsMut,
+        },
         instruction::{AuthorityType, TokenInstruction},
         state::{Account as HookTokenAccount, Mint as HookMint},
     },
     daddys_club::{
+        errors::ClubError,
         instructions::issue::IssueParams,
+        math,
         state::{HolderCheckpoint, Issue, IssueState, RevenueSource},
     },
     harness::*,
@@ -81,6 +91,8 @@ const THIEF_BOND: Pubkey = Pubkey::new_from_array([52u8; 32]);
 const INVESTOR_USDC: Pubkey = Pubkey::new_from_array([53u8; 32]);
 const INVESTOR_BOND: Pubkey = Pubkey::new_from_array([54u8; 32]);
 const ISSUER_USDC: Pubkey = Pubkey::new_from_array([55u8; 32]);
+/// Рахунок бонду другого власника — друга сторона прямого виклику гука.
+const BUYER_BOND: Pubkey = Pubkey::new_from_array([56u8; 32]);
 
 /// Скільки лежить у сховищі погашення — 12 000 USDC перехопленої частки.
 const PAID_IN: u64 = 12_000_000_000;
@@ -88,6 +100,8 @@ const PAID_IN: u64 = 12_000_000_000;
 const INDEX: u128 = 48_000_000_000;
 /// Баланс власника — 10 000 одиниць номіналу з 250 000.
 const BALANCE: u64 = 10_000_000_000;
+/// Що йому з `PAID_IN` належить: 4% — 480 USDC.
+const OWED: u64 = 480_000_000;
 
 /// Чотири архетипи викликача. Сторонній тут не єдиний і навіть не головний:
 /// `SC-007` питає про **будь-який** гаманець, а найнебезпечніші — саме ті, чиї
@@ -107,6 +121,10 @@ fn token_err(error: TokenError) -> Check<'static> {
 
 fn anchor_err(code: anchor_lang::error::ErrorCode) -> Check<'static> {
     Check::err(ProgramError::Custom(u32::from(code)))
+}
+
+fn club_err(error: ClubError) -> Check<'static> {
+    Check::err(ProgramError::Custom(u32::from(error)))
 }
 
 // ---- Кому відповідають сховища й мінт: питаємо саму інструкцію -------------
@@ -591,5 +609,216 @@ fn the_proceeds_are_not_unlocked_by_a_source_that_backs_another_issue() {
             (THIEF_USDC, usdc_account(OUTSIDER, 0)),
         ]),
         &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
+    );
+}
+
+// ---- Гук: чекпоінти рухає лише справжній переказ ---------------------------
+
+/// Виклик `execute` у тому вигляді, в якому його надішле атакувальник: тими
+/// самими байтами дискримінатора, що й Token-2022 (`instruction::Execute` несе
+/// тег інтерфейсу, не Anchor-ів sha256), і без жодного підпису — `owner` тут
+/// `UncheckedAccount`, бо підпис переказу перевіряє токен-програма, а не ми.
+///
+/// Тобто зібрати цю транзакцію може будь-хто, не маючи взагалі нічого: усі
+/// вісім акаунтів публічні, а `amount` він називає сам.
+fn execute_ix(amount: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        club_id(),
+        &daddys_club::instruction::Execute { amount }.data(),
+        vec![
+            AccountMeta::new(INVESTOR_BOND, false),
+            AccountMeta::new_readonly(BOND_MINT, false),
+            AccountMeta::new(BUYER_BOND, false),
+            AccountMeta::new_readonly(INVESTOR, false),
+            AccountMeta::new_readonly(extra_metas_pda(BOND_MINT).0, false),
+            AccountMeta::new_readonly(demo_issue(), false),
+            AccountMeta::new(holder_pda(demo_issue(), INVESTOR).0, false),
+            AccountMeta::new(holder_pda(demo_issue(), BUYER).0, false),
+        ],
+    )
+}
+
+/// Той самий рахунок бонду, але з піднятим прапорцем `transferring` — тобто
+/// такий, яким його бачить гук **усередині** справжнього переказу.
+///
+/// На ланцюгу так зробити не можна: рахунком володіє Token-2022, прапорець
+/// підіймає його ж процесор перед CPI в гук і опускає одразу після
+/// (`the_transferring_flag_is_down_again_…` у `tests/hook.rs`). Тут він
+/// виставляється руками — і це не дірка, а єдиний спосіб подати гукові
+/// **одну** справжню сторону: рахунок, який справді стоїть у чужому переказі,
+/// атакувальник міг би прикласти до свого виклику як другу сторону.
+fn mid_transfer(mut account: Account) -> Account {
+    {
+        let mut state = StateWithExtensionsMut::<HookTokenAccount>::unpack(&mut account.data)
+            .expect("рахунок бонду розпаковується");
+        let flag = state
+            .get_extension_mut::<TransferHookAccount>()
+            .expect("рахунок бонду має розширення гука");
+
+        flag.transferring = true.into();
+    }
+
+    account
+}
+
+/// Світ прямого виклику: обидва власники тримають однакову позицію з
+/// чекпоінтами в нулі, а у випуску вже перехоплено `PAID_IN`. Прапорці рахунків
+/// задає тест — більше в цьому світі не бракує нічого, тому відмовити тут може
+/// лише замок гука.
+fn hook_world(source: Account, destination: Account) -> Vec<(Pubkey, Account)> {
+    let issue = repaying(PAID_IN, INDEX);
+
+    vec![
+        (demo_issue(), anchor_account(&issue)),
+        (
+            holder_pda(demo_issue(), INVESTOR).0,
+            anchor_account(&holder_of(demo_issue(), INVESTOR)),
+        ),
+        (
+            holder_pda(demo_issue(), BUYER).0,
+            anchor_account(&holder_of(demo_issue(), BUYER)),
+        ),
+        (INVESTOR_BOND, source),
+        (BUYER_BOND, destination),
+        (BOND_MINT, bond_mint(demo_issue(), issue.raised)),
+        (extra_metas_pda(BOND_MINT).0, extra_metas_account()),
+        (INVESTOR, wallet()),
+        (BUYER, wallet()),
+        token_program(),
+    ]
+}
+
+fn ledger_after(result: &InstructionResult, owner: Pubkey) -> HolderCheckpoint {
+    decode(result, &holder_pda(demo_issue(), owner).0)
+}
+
+/// Скільки коштує прямий виклик, якщо він проходить: атакувальник називає
+/// `amount` сам, а гук відновлює з нього баланси «до передачі». Назвавши чужу
+/// позицію, він нараховує собі на подвійний баланс і водночас зсуває чекпоінт
+/// другої сторони на нуль її балансу — тобто списує їй усе зароблене.
+///
+/// Ці два числа й перевіряються нижче як те, чого **не** сталося.
+fn the_damage() -> (u64, u64) {
+    let doubled =
+        math::claimable(INDEX, 0, u128::from(2 * BALANCE), 0).expect("претензія рахується");
+    let honest = math::claimable(INDEX, 0, u128::from(BALANCE), 0).expect("претензія рахується");
+
+    assert_eq!(
+        honest,
+        u128::from(OWED),
+        "світ тесту розійшовся з арифметикою"
+    );
+    assert_eq!(
+        doubled,
+        2 * u128::from(OWED),
+        "атака мусить бути на реальну суму"
+    );
+
+    (OWED, 2 * OWED)
+}
+
+/// Гук — звичайна інструкція, і покликати її може будь-хто. Замок один:
+/// прапорець `transferring`, який Token-2022 тримає піднятим рівно на час
+/// переказу. Поза переказом обидва прапорці опущені — і виклик відмовляє
+/// названою помилкою, не зачепивши жодного чекпоінта.
+///
+/// Без цього замка найдешевша атака в протоколі виглядала б так: назвати
+/// `amount` завбільшки з чужу позицію й покликати `execute`. Грошей не
+/// рухається, але облік переписується — собі нараховується вдвічі, другій
+/// стороні чекпоінт зсувається на нуль її балансу, і зароблене нею зникає.
+#[test]
+fn the_hook_called_outside_a_transfer_moves_no_checkpoint() {
+    let (honest, doubled) = the_damage();
+
+    let result = setup().process_and_validate_instruction(
+        &execute_ix(BALANCE),
+        &hook_world(
+            bond_account(INVESTOR, BALANCE),
+            bond_account(BUYER, BALANCE),
+        ),
+        &[club_err(ClubError::NotTransferring)],
+    );
+
+    let attacker = ledger_after(&result, INVESTOR);
+    assert_eq!(
+        attacker.accrued, 0,
+        "нараховано без переказу: {doubled} замість {honest}"
+    );
+    assert_eq!(
+        attacker.index_at_checkpoint, 0,
+        "чекпоінт зрушено без переказу"
+    );
+
+    let victim = ledger_after(&result, BUYER);
+    assert_eq!(victim.accrued, 0);
+    assert_eq!(
+        victim.index_at_checkpoint, 0,
+        "чужий чекпоінт зсунуто: {honest} списано з власника, який нічого не робив"
+    );
+}
+
+/// Одного піднятого прапорця замало — і саме це найтонше місце замка.
+/// Справжній переказ підіймає прапорець на обох рахунках, тому рахунок із
+/// **чужого** справжнього переказу — єдина «справжня» сторона, яку
+/// атакувальник може десь узяти. Якби гук питав лише відправника, вистачило б
+/// підсунути такий рахунок першим; якби лише отримувача — другим. Тому
+/// перевіряються обидва напрямки.
+#[test]
+fn one_raised_flag_is_not_a_transfer() {
+    for (who, source, destination) in [
+        (
+            "відправник стоїть у чужому переказі",
+            mid_transfer(bond_account(INVESTOR, BALANCE)),
+            bond_account(BUYER, BALANCE),
+        ),
+        (
+            "отримувач стоїть у чужому переказі",
+            bond_account(INVESTOR, BALANCE),
+            mid_transfer(bond_account(BUYER, BALANCE)),
+        ),
+    ] {
+        println!("прямий виклик гука, {who}");
+
+        let result = setup().process_and_validate_instruction(
+            &execute_ix(BALANCE),
+            &hook_world(source, destination),
+            &[club_err(ClubError::NotTransferring)],
+        );
+
+        assert_eq!(ledger_after(&result, INVESTOR).index_at_checkpoint, 0);
+        assert_eq!(ledger_after(&result, BUYER).index_at_checkpoint, 0);
+    }
+}
+
+/// Контроль до двох тестів вище: з піднятими прапорцями той самий виклик
+/// проходить і списує рівно ту суму, про яку вони кажуть. Тобто відмовляють
+/// вони на прапорці, а не на чомусь випадковому — не на розкладці акаунтів, не
+/// на seeds і не на порожній претензії, які лишили б їх зеленими назавжди.
+///
+/// Це не дірка, а межа mollusk — та сама, що й з `is_signer` у тестах сховищ:
+/// у тесті дані акаунта пишемо ми, на ланцюгу — лише Token-2022, і підняти там
+/// прапорець не може ніхто, включно з власником рахунку.
+#[test]
+fn nothing_but_the_flag_stands_between_a_direct_call_and_the_ledger() {
+    let (honest, doubled) = the_damage();
+
+    let result = setup().process_and_validate_instruction(
+        &execute_ix(BALANCE),
+        &hook_world(
+            mid_transfer(bond_account(INVESTOR, BALANCE)),
+            mid_transfer(bond_account(BUYER, BALANCE)),
+        ),
+        &[Check::success()],
+    );
+
+    assert_eq!(
+        ledger_after(&result, INVESTOR).accrued,
+        doubled,
+        "замок знято, а нарахування не подвоїлось — тест міряє не те"
+    );
+    assert_eq!(
+        ledger_after(&result, BUYER).accrued,
+        0,
+        "замок знято, а {honest} у другої сторони вціліли — тест міряє не те"
     );
 }
