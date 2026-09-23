@@ -27,6 +27,7 @@ import {
   extraAccountMetasPda,
   holderPda,
   issuePda,
+  MARKET_PROGRAM_ID,
   offerPda,
   sourcePda,
 } from './pda.js';
@@ -34,6 +35,14 @@ import {
 const stateRs = readFileSync(new URL('../../../programs/daddys-club/src/state.rs', import.meta.url), 'utf8');
 const harnessRs = readFileSync(new URL('../../../programs/daddys-club/tests/harness.rs', import.meta.url), 'utf8');
 const libRs = readFileSync(new URL('../../../programs/daddys-club/src/lib.rs', import.meta.url), 'utf8');
+const marketStateRs = readFileSync(
+  new URL('../../../programs/daddys-market/src/state.rs', import.meta.url),
+  'utf8',
+);
+const marketLibRs = readFileSync(
+  new URL('../../../programs/daddys-market/src/lib.rs', import.meta.url),
+  'utf8',
+);
 const issueRs = readFileSync(
   new URL('../../../programs/daddys-club/src/instructions/issue.rs', import.meta.url),
   'utf8',
@@ -54,9 +63,9 @@ function must<T>(value: T | undefined, what: string): T {
   return value;
 }
 
-/** `pub const X_SEED: &[u8] = b"...";` зі `state.rs`. */
-function seedBytesFromState(name: string): string {
-  const found = new RegExp(`pub const ${name}: &\\[u8\\] = b"([^"]+)";`).exec(stateRs);
+/** `pub const X_SEED: &[u8] = b"...";` зі `state.rs` названої програми. */
+function seedBytesFromState(name: string, source: string = stateRs): string {
+  const found = new RegExp(`pub const ${name}: &\\[u8\\] = b"([^"]+)";`).exec(source);
   return must(found?.[1], `${name} у state.rs`);
 }
 
@@ -89,9 +98,14 @@ describe('seeds збігаються зі state.rs', () => {
     ['SOURCE_SEED', SOURCE_SEED],
     ['ISSUE_SEED', ISSUE_SEED],
     ['HOLDER_SEED', HOLDER_SEED],
-    ['OFFER_SEED', OFFER_SEED],
   ])('%s', (name, bytes) => {
     expect(utf8.decode(bytes)).toBe(seedBytesFromState(name));
+  });
+
+  it('OFFER_SEED збігається зі state.rs програми ринку', () => {
+    // Оферта — єдиний акаунт не ядра: вторинка виїхала в `daddys_market`, бо
+    // ядро є гуком мінта бонда й не може переказати його зі сховища оферти.
+    expect(utf8.decode(OFFER_SEED)).toBe(seedBytesFromState('OFFER_SEED', marketStateRs));
   });
 
   it('EXTRA_METAS_SEED збігається з issue.rs', () => {
@@ -106,9 +120,10 @@ describe('seeds збігаються зі state.rs', () => {
     // Seed, доданий у state.rs без деривації тут, — це акаунт, який клієнт не
     // вміє знайти. Хай про нього скаже тест, а не порожній екран.
     const declared = [...stateRs.matchAll(/pub const (\w+_SEED):/g)].map((found) => found[1]);
-    expect(declared.sort()).toEqual(
-      ['CONFIG_SEED', 'HOLDER_SEED', 'ISSUE_SEED', 'OFFER_SEED', 'SOURCE_SEED'],
-    );
+    expect(declared.sort()).toEqual(['CONFIG_SEED', 'HOLDER_SEED', 'ISSUE_SEED', 'SOURCE_SEED']);
+
+    const market = [...marketStateRs.matchAll(/pub const (\w+_SEED):/g)].map((found) => found[1]);
+    expect(market.sort()).toEqual(['OFFER_SEED']);
   });
 });
 
@@ -129,6 +144,17 @@ describe('program id', () => {
   it('той самий, що declare_id! у програмі', () => {
     const found = /declare_id!\("([^"]+)"\)/.exec(libRs);
     expect(PROGRAM_ID.toBase58()).toBe(must(found?.[1], 'declare_id! у lib.rs'));
+  });
+
+  it('id ринку той самий, що declare_id! у його програмі', () => {
+    const found = /declare_id!\("([^"]+)"\)/.exec(marketLibRs);
+    expect(MARKET_PROGRAM_ID.toBase58()).toBe(must(found?.[1], 'declare_id! у market lib.rs'));
+  });
+
+  it('це різні програми', () => {
+    // Одна й та сама адреса тут означала б, що вторинку зібрали в ядрі — тобто
+    // те, що Solana відхиляє реентрансі.
+    expect(PROGRAM_ID.equals(MARKET_PROGRAM_ID)).toBe(false);
   });
 });
 

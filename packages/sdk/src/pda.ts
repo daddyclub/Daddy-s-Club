@@ -17,6 +17,9 @@ import { PublicKey } from '@solana/web3.js';
 /** Program ID ядра — `declare_id!` у programs/daddys-club/src/lib.rs. */
 export const PROGRAM_ID = new PublicKey('7eT5T7mq1uD9piYJ2rMAzma8iYL7C7CZGPgxsB8DckoB');
 
+/** `daddys_market::ID` — вторинка (`FR-024`…`FR-027`). */
+export const MARKET_PROGRAM_ID = new PublicKey('G29gfknNBKtvpfPAjrigefg3tkX7cVXFgnd62NUtcniq');
+
 const utf8 = new TextEncoder();
 
 /** `state.rs` → `CONFIG_SEED`. */
@@ -27,7 +30,7 @@ export const SOURCE_SEED = utf8.encode('source');
 export const ISSUE_SEED = utf8.encode('issue');
 /** `state.rs` → `HOLDER_SEED`. */
 export const HOLDER_SEED = utf8.encode('holder');
-/** `state.rs` → `OFFER_SEED`. */
+/** `daddys-market/state.rs` → `OFFER_SEED`: вторинка живе в іншій програмі. */
 export const OFFER_SEED = utf8.encode('offer');
 /**
  * Список додаткових акаунтів гука. Seed належить не протоколу, а
@@ -103,12 +106,19 @@ export function extraAccountMetasPda(bondMint: PublicKey, programId: PublicKey =
   return derive([EXTRA_METAS_SEED, bondMint.toBytes()], programId);
 }
 
-/** Оферта вторинного ринку. Seeds `["offer", issue, seller, nonce]` (`FR-024`). */
+/**
+ * Оферта вторинного ринку. Seeds `["offer", issue, seller, nonce]` (`FR-024`).
+ *
+ * Дерівується від **`MARKET_PROGRAM_ID`**, а не від ядра: ядро є гуком мінта
+ * бонда й не може переказати його зі сховища оферти, тому вторинка — окрема
+ * програма (`docs/PLAN.md` → Архітектура). Підставивши сюди id ядра, клієнт
+ * отримає адресу, за якою ніколи нічого не буде.
+ */
 export function offerPda(
   issue: PublicKey,
   seller: PublicKey,
   nonce: bigint,
-  programId: PublicKey = PROGRAM_ID,
+  programId: PublicKey = MARKET_PROGRAM_ID,
 ): Derived {
   return derive([OFFER_SEED, issue.toBytes(), seller.toBytes(), u64Seed(nonce)], programId);
 }

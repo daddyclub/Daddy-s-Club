@@ -7,6 +7,7 @@ skip-lint = false
 
 [programs.localnet]
 daddys_club = "7eT5T7mq1uD9piYJ2rMAzma8iYL7C7CZGPgxsB8DckoB"
+daddys_market = "G29gfknNBKtvpfPAjrigefg3tkX7cVXFgnd62NUtcniq"
 demo_issuer = "8wKjGiLvnMTv7oi9PcztmbRv4v63emT2qPPrA8x1fW3z"
 
 [registry]

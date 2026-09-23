@@ -1,0 +1,29 @@
+[package]
+name = "daddys-market"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "daddys_market"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+anchor-debug = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true }
+# Ринок читає стан ядра (`Issue`, `ProtocolConfig`) і кличе його інструкції —
+# відкриття обліку для сховища оферти й виплату накопиченого. Модулі `::cpi`
+# існують лише під цією ознакою.
+daddys-club = { path = "../daddys-club", features = ["cpi"] }

@@ -40,9 +40,10 @@ use {
         },
         state::{
             Issue, IssueState, ProtocolConfig, RevenueSource, CONFIG_SEED, HOLDER_SEED, ISSUE_SEED,
-            OFFER_SEED, SOURCE_SEED,
+            SOURCE_SEED,
         },
     },
+    daddys_market::state::OFFER_SEED,
     demo_issuer::POOL_SEED,
     mollusk_svm::{
         program::{
@@ -108,6 +109,12 @@ pub fn club_id() -> Pubkey {
     Pubkey::new_from_array(daddys_club::ID.to_bytes())
 }
 
+/// Вторинний ринок — окрема програма, бо ядро є гуком мінта бонда й не може
+/// переказати його зі сховища оферти (`docs/PLAN.md` → Архітектура).
+pub fn market_id() -> Pubkey {
+    Pubkey::new_from_array(daddys_market::ID.to_bytes())
+}
+
 /// Референсний емітент. Він тут не для повноти: `intercept` приймає дохід лише
 /// від того, хто підписав PDA програми-емітента (`FR-004`), і без справжнього
 /// байткоду цієї програми такий виклик неможливо ані зробити, ані підробити.
@@ -168,6 +175,8 @@ pub fn extra_metas_pda(mint: Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[EXTRA_METAS_SEED, mint.as_ref()], &club_id())
 }
 
+/// Оферта живе в програмі ринку, тому й деривується від неї. Помилитись тут
+/// легко саме тому, що решта PDA в цьому файлі — від ядра.
 pub fn offer_pda(issue: Pubkey, seller: Pubkey, nonce: u64) -> (Pubkey, u8) {
     Pubkey::find_program_address(
         &[
@@ -176,7 +185,7 @@ pub fn offer_pda(issue: Pubkey, seller: Pubkey, nonce: u64) -> (Pubkey, u8) {
             seller.as_ref(),
             &nonce.to_le_bytes(),
         ],
-        &club_id(),
+        &market_id(),
     )
 }
 
@@ -201,12 +210,13 @@ fn point_mollusk_at_the_built_programs() {
     });
 }
 
-/// Обидві програми, Token-2022 і годинник на `NOW`.
+/// Усі три програми, Token-2022 і годинник на `NOW`.
 pub fn setup() -> Mollusk {
     point_mollusk_at_the_built_programs();
 
     let mut mollusk = Mollusk::new(&club_id(), "daddys_club");
     mollusk.add_program_with_loader(&issuer_program_id(), "demo_issuer", &loader_keys::LOADER_V3);
+    mollusk.add_program_with_loader(&market_id(), "daddys_market", &loader_keys::LOADER_V3);
     mollusk_svm_programs_token::token2022::add_program(&mut mollusk);
     mollusk.sysvars.clock.unix_timestamp = NOW;
 
@@ -583,16 +593,21 @@ mod tests {
     /// байткод виконується, і не має ламатись щоразу, коли інструкція змінює
     /// підпис. Відкинути такий виклик програма мусить сама — а щоб відкинути,
     /// їй треба спершу запуститись.
+    fn unknown_call_to(program: Pubkey) -> Instruction {
+        Instruction::new_with_bytes(program, &[0u8; 8], vec![AccountMeta::new(ADMIN, true)])
+    }
+
     fn unknown_call() -> Instruction {
-        Instruction::new_with_bytes(club_id(), &[0u8; 8], vec![AccountMeta::new(ADMIN, true)])
+        unknown_call_to(club_id())
     }
 
     #[test]
-    fn both_programs_are_loaded_from_the_built_bytecode() {
+    fn every_program_is_loaded_from_the_built_bytecode() {
         let mollusk = setup();
 
         for (name, id) in [
             ("daddys_club", club_id()),
+            ("daddys_market", market_id()),
             ("demo_issuer", issuer_program_id()),
             ("token-2022", token_program_id()),
         ] {
@@ -618,6 +633,21 @@ mod tests {
         assert!(
             result.compute_units_consumed > 0,
             "програма не виконувалась: {:?}",
+            result.program_result
+        );
+    }
+
+    /// Те саме для вторинки: байткод у кеші ще не означає, що він виконується.
+    #[test]
+    fn the_market_program_actually_runs() {
+        let mollusk = setup();
+
+        let result =
+            mollusk.process_instruction(&unknown_call_to(market_id()), &[(ADMIN, wallet())]);
+
+        assert!(
+            result.compute_units_consumed > 0,
+            "програма ринку не виконувалась: {:?}",
             result.program_result
         );
     }
@@ -679,7 +709,7 @@ mod tests {
                     INVESTOR.as_ref(),
                     &5u64.to_le_bytes()
                 ],
-                &club_id()
+                &market_id()
             )
         );
     }

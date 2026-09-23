@@ -34,6 +34,18 @@ const stateRs = readFileSync(
   new URL('../../../programs/daddys-club/src/state.rs', import.meta.url),
   'utf8',
 );
+const marketStateRs = readFileSync(
+  new URL('../../../programs/daddys-market/src/state.rs', import.meta.url),
+  'utf8',
+);
+
+/**
+ * Де оголошено тип. `Offer` переїхав у програму ринку разом із вторинкою: ядро
+ * є гуком мінта бонда й не може переказати його зі сховища оферти
+ * (`docs/PLAN.md` → Архітектура). Декодер від цього не змінився — акаунт той
+ * самий, — але джерело правди для нього тепер інший файл.
+ */
+const stateOf = (name: string): string => (name === 'Offer' ? marketStateRs : stateRs);
 
 const KINDS: readonly AccountKind[] = [
   'ProtocolConfig',
@@ -52,10 +64,11 @@ function must<T>(value: T | undefined, what: string): T {
 
 /** Тіло `pub struct X { ... }` або `pub enum X { ... }` зі `state.rs`. */
 function block(keyword: 'struct' | 'enum', name: string): string {
-  const start = stateRs.indexOf(`pub ${keyword} ${name} {`);
-  const end = stateRs.indexOf('\n}', start);
+  const source = stateOf(name);
+  const start = source.indexOf(`pub ${keyword} ${name} {`);
+  const end = source.indexOf('\n}', start);
   if (start < 0 || end < 0) throw new Error(`${keyword} ${name} у state.rs не знайдено`);
-  return stateRs.slice(start, end);
+  return source.slice(start, end);
 }
 
 /** Поля структури в порядку оголошення — саме він і є порядком байтів borsh. */
@@ -70,7 +83,7 @@ const camel = (snake: string): string =>
 
 /** Числа з `account_sizes_are_pinned` — тими самими рахується rent-exempt. */
 function pinnedSpace(name: string): number {
-  const found = new RegExp(`${name}::INIT_SPACE, (\\d+)`).exec(stateRs);
+  const found = new RegExp(`${name}::INIT_SPACE, (\\d+)`).exec(stateOf(name));
   return Number(must(found?.[1], `${name}::INIT_SPACE`));
 }
 

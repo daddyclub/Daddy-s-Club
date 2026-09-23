@@ -1072,6 +1072,7 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "base64 0.22.1",
+ "daddys-market",
  "demo-issuer",
  "mollusk-svm",
  "mollusk-svm-programs-token",
@@ -1089,6 +1090,15 @@ dependencies = [
  "spl-tlv-account-resolution 0.9.0",
  "spl-token-interface",
  "spl-transfer-hook-interface",
+]
+
+[[package]]
+name = "daddys-market"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "daddys-club",
 ]
 
 [[package]]

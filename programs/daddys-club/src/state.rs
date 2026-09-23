@@ -15,7 +15,6 @@ pub const CONFIG_SEED: &[u8] = b"config";
 pub const SOURCE_SEED: &[u8] = b"source";
 pub const ISSUE_SEED: &[u8] = b"issue";
 pub const HOLDER_SEED: &[u8] = b"holder";
-pub const OFFER_SEED: &[u8] = b"offer";
 
 /// Життєвий цикл випуску.
 ///
@@ -120,21 +119,6 @@ pub struct HolderCheckpoint {
     pub bump: u8,
 }
 
-/// Оферта вторинного ринку. Seeds `["offer", issue, seller, nonce]`.
-#[account]
-#[derive(InitSpace)]
-pub struct Offer {
-    pub seller: Pubkey,
-    pub issue: Pubkey,
-    pub amount: u64,
-    pub price: u64,
-    /// Токени лежать тут до купівлі або скасування — подвійний продаж
-    /// неможливий (`FR-025`).
-    pub token_escrow: Pubkey,
-    pub nonce: u64,
-    pub bump: u8,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +184,5 @@ mod tests {
         assert_eq!(RevenueSource::INIT_SPACE, 162);
         assert_eq!(Issue::INIT_SPACE, 214);
         assert_eq!(HolderCheckpoint::INIT_SPACE, 97);
-        assert_eq!(Offer::INIT_SPACE, 121);
     }
 }

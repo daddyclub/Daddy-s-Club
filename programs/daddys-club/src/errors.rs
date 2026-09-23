@@ -5,16 +5,17 @@
 //! і те, і те має бути видно оком при читанні цього файлу.
 //!
 //! Невживані варіанти тут є, і кожен із них зарезервований під **названу**
-//! задачу: три помилки оферти — під вторинку (`T034`…`T036`),
-//! `InsufficientRevenueHistory` — під поріг допуску (`T040`), `IssueNotMatured`
-//! — під past due (`T042`). Ознака резерву — вимога в докстрінгу: варіант без
+//! задачу: `InsufficientRevenueHistory` — під поріг допуску (`T040`),
+//! `IssueNotMatured` — під past due (`T042`). Ознака резерву — вимога в докстрінгу: варіант без
 //! вимоги і без ловця це не резерв, а сміття. Три таких прибрано на закритті M1
 //! (`PositionNotOpen`, `PledgeExceedsInflow`, `NotImplemented`) — одним заходом,
 //! бо кожне видалення зсуває коди наступних. Ще два — на `T032`:
 //! `RecipientPositionMissing` і `IssueMismatch` були зарезервовані під
 //! `execute`, але обидві відмови там стережуть Anchor-обмеження й кидають
 //! власні коди (`AccountNotInitialized`, `ConstraintSeeds`/`ConstraintHasOne`),
-//! а ловця з нашим ім'ям для них не існує.
+//! а ловця з нашим ім'ям для них не існує. Ще три — на `T033a`: помилки
+//! оферти не прибрано, а **переїхало** разом із вторинкою в `daddys_market`,
+//! бо ядро в цю подію більше не втручається (`docs/PLAN.md` → Архітектура).
 //!
 //! Порядок оголошення визначає числові коди: Anchor нумерує варіанти від
 //! `ERROR_CODE_OFFSET`. Поки програму не задеплоєно, порядок вільний; після
@@ -152,18 +153,6 @@ pub enum ClubError {
     #[msg("Hook was invoked outside a token transfer")]
     NotTransferring,
 
-    // ---- Вторинний ринок ----
-    /// `FR-024`: ціну і кількість задає продавець; нульових оферт не буває.
-    #[msg("Offer amount and price must both be above zero")]
-    OfferTermsInvalid,
-
-    /// `FR-025`: оферту вже викупили або скасували.
-    #[msg("Offer is no longer active")]
-    OfferNotActive,
-
-    #[msg("Insufficient bond balance")]
-    InsufficientBondBalance,
-
     // ---- Арифметика ----
     // Межа, на якій `Option` із math.rs стає помилкою з іменем. Причини
     // розділені, бо на ланцюгу видно лише код: «переповнення» і «чекпоінт із
@@ -217,9 +206,6 @@ mod tests {
         ClubError::IssueNotMatured,
         ClubError::NothingToClaim,
         ClubError::NotTransferring,
-        ClubError::OfferTermsInvalid,
-        ClubError::OfferNotActive,
-        ClubError::InsufficientBondBalance,
         ClubError::MathOverflow,
         ClubError::ZeroBondSupply,
         ClubError::CheckpointAheadOfIndex,
