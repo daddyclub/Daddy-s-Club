@@ -43,7 +43,7 @@ use {
             SOURCE_SEED,
         },
     },
-    daddys_market::state::OFFER_SEED,
+    daddys_market::state::{ESCROW_SEED, OFFER_SEED},
     demo_issuer::POOL_SEED,
     mollusk_svm::{
         program::{
@@ -187,6 +187,12 @@ pub fn offer_pda(issue: Pubkey, seller: Pubkey, nonce: u64) -> (Pubkey, u8) {
         ],
         &market_id(),
     )
+}
+
+/// Сховище оферти — PDA від самої оферти, тому знайти його може будь-хто, хто
+/// бачить оферту, а не лише той, хто її виставляв.
+pub fn offer_escrow_pda(offer: Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[ESCROW_SEED, offer.as_ref()], &market_id())
 }
 
 // ---- Підняття середовища ---------------------------------------------------
@@ -699,6 +705,13 @@ mod tests {
         assert_eq!(
             issuer_authority(),
             Pubkey::find_program_address(&[b"pool"], &issuer_program_id())
+        );
+        assert_eq!(
+            offer_escrow_pda(offer_pda(issue, INVESTOR, 5).0),
+            Pubkey::find_program_address(
+                &[b"escrow", offer_pda(issue, INVESTOR, 5).0.as_ref()],
+                &market_id()
+            )
         );
         assert_eq!(
             offer_pda(issue, INVESTOR, 5),

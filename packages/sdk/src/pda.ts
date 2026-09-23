@@ -30,6 +30,9 @@ export const SOURCE_SEED = utf8.encode('source');
 export const ISSUE_SEED = utf8.encode('issue');
 /** `state.rs` → `HOLDER_SEED`. */
 export const HOLDER_SEED = utf8.encode('holder');
+/** `daddys-market/state.rs` → `ESCROW_SEED`: сховище оферти. */
+export const ESCROW_SEED = utf8.encode('escrow');
+
 /** `daddys-market/state.rs` → `OFFER_SEED`: вторинка живе в іншій програмі. */
 export const OFFER_SEED = utf8.encode('offer');
 /**
@@ -121,4 +124,12 @@ export function offerPda(
   programId: PublicKey = MARKET_PROGRAM_ID,
 ): Derived {
   return derive([OFFER_SEED, issue.toBytes(), seller.toBytes(), u64Seed(nonce)], programId);
+}
+
+/**
+ * Сховище оферти. Дерівується від самої оферти, тому знайти його може будь-хто,
+ * хто бачить оферту: бонд лежить тут до купівлі або скасування (`FR-025`).
+ */
+export function offerEscrowPda(offer: PublicKey, programId: PublicKey = MARKET_PROGRAM_ID): Derived {
+  return derive([ESCROW_SEED, offer.toBytes()], programId);
 }

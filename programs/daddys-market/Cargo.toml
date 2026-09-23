@@ -27,3 +27,6 @@ anchor-spl = { workspace = true }
 # відкриття обліку для сховища оферти й виплату накопиченого. Модулі `::cpi`
 # існують лише під цією ознакою.
 daddys-club = { path = "../daddys-club", features = ["cpi"] }
+# Набір акаунтів гука резолвиться з того самого списку в мінті, який читає
+# Token-2022 — див. пін версії в корінному Cargo.toml.
+spl-transfer-hook-interface = { workspace = true }

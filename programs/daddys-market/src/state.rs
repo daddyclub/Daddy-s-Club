@@ -7,6 +7,9 @@
 use anchor_lang::prelude::*;
 
 pub const OFFER_SEED: &[u8] = b"offer";
+/// Сховище оферти — PDA від самої оферти: адресу мусить знаходити будь-хто, хто
+/// бачить оферту, а не лише той, хто її виставляв.
+pub const ESCROW_SEED: &[u8] = b"escrow";
 
 /// Оферта вторинного ринку. Seeds `["offer", issue, seller, nonce]`.
 ///

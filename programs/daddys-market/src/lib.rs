@@ -18,11 +18,24 @@ use anchor_lang::prelude::*;
 declare_id!("G29gfknNBKtvpfPAjrigefg3tkX7cVXFgnd62NUtcniq");
 
 pub mod errors;
+pub mod instructions;
 pub mod state;
+
+use instructions::*;
 
 #[program]
 pub mod daddys_market {
-    #![allow(unused_imports)]
-
     use super::*;
+
+    /// Виставляє бонд на продаж: `amount` одиниць номіналу за `price` USDC
+    /// цілком (`FR-024`). Токени переїжджають у сховище оферти й лежать там до
+    /// купівлі або скасування (`FR-025`).
+    pub fn create_offer(
+        ctx: Context<CreateOffer>,
+        nonce: u64,
+        amount: u64,
+        price: u64,
+    ) -> Result<()> {
+        instructions::market::create_offer(ctx, nonce, amount, price)
+    }
 }
