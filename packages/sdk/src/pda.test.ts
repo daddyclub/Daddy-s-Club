@@ -20,6 +20,7 @@ import {
   ESCROW_SEED,
   EXTRA_METAS_SEED,
   HOLDER_SEED,
+  PROCEEDS_SEED,
   ISSUE_SEED,
   OFFER_SEED,
   PROGRAM_ID,
@@ -31,6 +32,7 @@ import {
   MARKET_PROGRAM_ID,
   offerEscrowPda,
   offerPda,
+  offerProceedsPda,
   sourcePda,
 } from './pda.js';
 
@@ -107,6 +109,7 @@ describe('seeds збігаються зі state.rs', () => {
   it.each([
     ['OFFER_SEED', OFFER_SEED],
     ['ESCROW_SEED', ESCROW_SEED],
+    ['PROCEEDS_SEED', PROCEEDS_SEED],
   ])('%s збігається зі state.rs програми ринку', (name, bytes) => {
     // Акаунти не ядра: вторинка виїхала в `daddys_market`, бо ядро є гуком
     // мінта бонда й не може переказати його зі сховища оферти.
@@ -128,7 +131,7 @@ describe('seeds збігаються зі state.rs', () => {
     expect(declared.sort()).toEqual(['CONFIG_SEED', 'HOLDER_SEED', 'ISSUE_SEED', 'SOURCE_SEED']);
 
     const market = [...marketStateRs.matchAll(/pub const (\w+_SEED):/g)].map((found) => found[1]);
-    expect(market.sort()).toEqual(['ESCROW_SEED', 'OFFER_SEED']);
+    expect(market.sort()).toEqual(['ESCROW_SEED', 'OFFER_SEED', 'PROCEEDS_SEED']);
   });
 });
 
@@ -141,6 +144,7 @@ describe('порядок seeds збігається з харнесом', () => 
     ['extra_metas_pda', ['EXTRA_METAS_SEED', 'mint.as_ref()']],
     ['offer_pda', ['OFFER_SEED', 'issue.as_ref()', 'seller.as_ref()', '&nonce.to_le_bytes()']],
     ['offer_escrow_pda', ['ESCROW_SEED', 'offer.as_ref()']],
+    ['offer_proceeds_pda', ['PROCEEDS_SEED', 'offer.as_ref()']],
   ])('%s', (fn, expected) => {
     expect(harnessSeeds(fn)).toEqual(expected);
   });
@@ -177,6 +181,7 @@ describe('деривації', () => {
       extraAccountMetasPda(BOND_MINT),
       offerPda(issue, INVESTOR, 5n),
       offerEscrowPda(offerPda(issue, INVESTOR, 5n).address),
+      offerProceedsPda(offerPda(issue, INVESTOR, 5n).address),
     ]) {
       expect(PublicKey.isOnCurve(derived.address.toBytes())).toBe(false);
       expect(derived.bump).toBeGreaterThanOrEqual(0);

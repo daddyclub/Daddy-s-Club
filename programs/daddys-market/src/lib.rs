@@ -38,4 +38,17 @@ pub mod daddys_market {
     ) -> Result<()> {
         instructions::market::create_offer(ctx, nonce, amount, price)
     }
+
+    /// Викуповує оферту цілком (`FR-026`): продавець отримує USDC за
+    /// вирахуванням торгової комісії (`FR-035`), покупець — бонд і відкритий
+    /// облік у тій самій транзакції (`FR-038`).
+    pub fn buy_offer(ctx: Context<BuyOffer>) -> Result<()> {
+        instructions::market::buy_offer(ctx)
+    }
+
+    /// Скасовує оферту (`FR-027`): лот повертається продавцеві повністю й без
+    /// комісії, разом із тим, що набігло, поки оферта стояла.
+    pub fn cancel_offer(ctx: Context<CancelOffer>) -> Result<()> {
+        instructions::market::cancel_offer(ctx)
+    }
 }

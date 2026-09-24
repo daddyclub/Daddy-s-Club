@@ -43,7 +43,7 @@ use {
             SOURCE_SEED,
         },
     },
-    daddys_market::state::{ESCROW_SEED, OFFER_SEED},
+    daddys_market::state::{ESCROW_SEED, OFFER_SEED, PROCEEDS_SEED},
     demo_issuer::POOL_SEED,
     mollusk_svm::{
         program::{
@@ -193,6 +193,12 @@ pub fn offer_pda(issue: Pubkey, seller: Pubkey, nonce: u64) -> (Pubkey, u8) {
 /// бачить оферту, а не лише той, хто її виставляв.
 pub fn offer_escrow_pda(offer: Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[ESCROW_SEED, offer.as_ref()], &market_id())
+}
+
+/// USDC-рахунок оферти: живе рівно стільки, скільки триває викуп або
+/// скасування, і саме через нього продавцеві їде накопичене за час оферти.
+pub fn offer_proceeds_pda(offer: Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[PROCEEDS_SEED, offer.as_ref()], &market_id())
 }
 
 // ---- Підняття середовища ---------------------------------------------------
@@ -705,6 +711,13 @@ mod tests {
         assert_eq!(
             issuer_authority(),
             Pubkey::find_program_address(&[b"pool"], &issuer_program_id())
+        );
+        assert_eq!(
+            offer_proceeds_pda(offer_pda(issue, INVESTOR, 5).0),
+            Pubkey::find_program_address(
+                &[b"proceeds", offer_pda(issue, INVESTOR, 5).0.as_ref()],
+                &market_id()
+            )
         );
         assert_eq!(
             offer_escrow_pda(offer_pda(issue, INVESTOR, 5).0),

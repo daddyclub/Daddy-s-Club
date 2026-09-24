@@ -33,6 +33,9 @@ export const HOLDER_SEED = utf8.encode('holder');
 /** `daddys-market/state.rs` → `ESCROW_SEED`: сховище оферти. */
 export const ESCROW_SEED = utf8.encode('escrow');
 
+/** `daddys-market/state.rs` → `PROCEEDS_SEED`: USDC-рахунок оферти на час угоди. */
+export const PROCEEDS_SEED = utf8.encode('proceeds');
+
 /** `daddys-market/state.rs` → `OFFER_SEED`: вторинка живе в іншій програмі. */
 export const OFFER_SEED = utf8.encode('offer');
 /**
@@ -132,4 +135,16 @@ export function offerPda(
  */
 export function offerEscrowPda(offer: PublicKey, programId: PublicKey = MARKET_PROGRAM_ID): Derived {
   return derive([ESCROW_SEED, offer.toBytes()], programId);
+}
+
+/**
+ * USDC-рахунок оферти. Існує лише всередині викупу або скасування: `claim`
+ * ядра віддає виплату на рахунок власника обліку, а власник тут — PDA оферти
+ * (`FR-026`, `FR-027`).
+ */
+export function offerProceedsPda(
+  offer: PublicKey,
+  programId: PublicKey = MARKET_PROGRAM_ID,
+): Derived {
+  return derive([PROCEEDS_SEED, offer.toBytes()], programId);
 }

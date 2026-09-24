@@ -1,5 +1,5 @@
-//! `create_offer` (`FR-024`, `FR-025`) — виставлення бонду на продаж на
-//! справжньому байткоді всіх трьох програм.
+//! Вторинний ринок (`FR-024`…`FR-027`, `FR-035`, `FR-038`) — виставлення,
+//! викуп і скасування на справжньому байткоді всіх трьох програм.
 //!
 //! Тести лежать у цьому крейті, а не в крейті ринку, з тієї ж причини, що й
 //! `tests/swap.rs`: харнес один, і він піднімає всі три програми разом із
@@ -33,6 +33,9 @@ use {
 };
 
 const SELLER_BOND: Pubkey = Pubkey::new_from_array([71u8; 32]);
+const SELLER_USDC: Pubkey = Pubkey::new_from_array([72u8; 32]);
+const BUYER_USDC: Pubkey = Pubkey::new_from_array([73u8; 32]);
+const BUYER_BOND: Pubkey = Pubkey::new_from_array([74u8; 32]);
 
 /// Скільки вже перехоплено у сховище погашення — 12 000 USDC.
 const PAID_IN: u64 = 12_000_000_000;
@@ -299,5 +302,479 @@ fn the_same_nonce_does_not_list_twice() {
         token_balance(&result, &escrow_key()),
         LOT,
         "у сховищі опинилось не те, що виставляли"
+    );
+}
+
+// ---- Викуп (`FR-026`, `FR-035`, `FR-038`) ----------------------------------
+
+/// З чим покупець приходить на ринок.
+const BUYER_CASH: u64 = 10_000_000_000;
+
+/// Комісія за ставкою **протоколу**, а не за літералом: інакше тест лишився б
+/// зеленим після зміни ставки в конфізі й перестав би про неї говорити.
+fn fee_of(price: u64) -> u64 {
+    price * u64::from(stored_config().trading_fee_bps) / 10_000
+}
+
+fn to_seller(price: u64) -> u64 {
+    price - fee_of(price)
+}
+
+fn proceeds_key() -> Pubkey {
+    offer_proceeds_pda(offer_key()).0
+}
+
+/// Викуп у тому вигляді, в якому його подає покупець. Порядок — оголошення
+/// `BuyOffer`.
+fn buy_offer_ix() -> Instruction {
+    Instruction::new_with_bytes(
+        market_id(),
+        &daddys_market::instruction::BuyOffer {}.data(),
+        vec![
+            AccountMeta::new_readonly(config_pda().0, false),
+            AccountMeta::new_readonly(demo_issue(), false),
+            AccountMeta::new(offer_key(), false),
+            AccountMeta::new(escrow_key(), false),
+            AccountMeta::new(proceeds_key(), false),
+            AccountMeta::new(INVESTOR, false),
+            AccountMeta::new(SELLER_USDC, false),
+            AccountMeta::new(BUYER, true),
+            AccountMeta::new(BUYER_USDC, false),
+            AccountMeta::new(BUYER_BOND, false),
+            AccountMeta::new(holder_pda(demo_issue(), BUYER).0, false),
+            AccountMeta::new(holder_pda(demo_issue(), offer_key()).0, false),
+            AccountMeta::new(ESCROW_VAULT, false),
+            AccountMeta::new(FEE_VAULT, false),
+            AccountMeta::new_readonly(BOND_MINT, false),
+            AccountMeta::new_readonly(USDC_MINT, false),
+            AccountMeta::new_readonly(extra_metas_pda(BOND_MINT).0, false),
+            AccountMeta::new_readonly(club_id(), false),
+            AccountMeta::new_readonly(token_program().0, false),
+            AccountMeta::new_readonly(system_program().0, false),
+        ],
+    )
+}
+
+/// Світ виставлення плюс усе, що потрібно для викупу: протокол, покупець із
+/// грошима, сховище погашення й скарбниця комісій.
+fn market_world() -> Vec<(Pubkey, Account)> {
+    let issue = repaying(PAID_IN, INDEX);
+
+    let mut accounts = world();
+    accounts.extend([
+        (config_pda().0, anchor_account(&stored_config())),
+        (SELLER_USDC, usdc_account(INVESTOR, 0)),
+        (BUYER, wallet()),
+        (BUYER_USDC, usdc_account(BUYER, BUYER_CASH)),
+        (BUYER_BOND, bond_account(BUYER, 0)),
+        (holder_pda(demo_issue(), BUYER).0, uninitialized()),
+        (proceeds_key(), uninitialized()),
+        (ESCROW_VAULT, usdc_account(demo_issue(), issue.repaid_total)),
+        (FEE_VAULT, usdc_account(ADMIN, 0)),
+        (USDC_MINT, usdc_mint(1_000_000_000_000_000)),
+    ]);
+
+    accounts
+}
+
+/// Світ після виставлення: та сама оферта, але вже на ланцюгу. `moved_index` —
+/// це те, що сталося, поки оферта стояла: у випуск прийшло ще перехоплення, і
+/// індекс поїхав уперед.
+fn after_listing(moved_index: Option<(u64, u128)>) -> Vec<(Pubkey, Account)> {
+    let listed = setup().process_and_validate_instruction(
+        &create_offer_ix(LOT, PRICE),
+        &market_world(),
+        &[Check::success()],
+    );
+
+    let mut accounts: Vec<(Pubkey, Account)> = market_world()
+        .into_iter()
+        .map(|(key, account)| match listed.get_account(&key) {
+            Some(updated) => (key, updated.clone()),
+            None => (key, account),
+        })
+        .collect();
+
+    if let Some((repaid, index)) = moved_index {
+        accounts = replacing(
+            &accounts,
+            demo_issue(),
+            anchor_account(&repaying(repaid, index)),
+        );
+        accounts = replacing(&accounts, ESCROW_VAULT, usdc_account(demo_issue(), repaid));
+    }
+
+    accounts
+}
+
+fn lamports_of(result: &InstructionResult, key: &Pubkey) -> u64 {
+    result
+        .get_account(key)
+        .map(|account| account.lamports)
+        .unwrap_or_default()
+}
+
+/// `FR-026`: купівля атомарна — бонд у покупця, гроші в продавця, і жодного
+/// стану посередині. `FR-035`: комісія утримується з того, що отримує
+/// продавець, тому покупець платить рівно стільки, скільки написано в оферті.
+#[test]
+fn a_purchase_hands_over_the_bond_and_the_money_at_once() {
+    let result = setup().process_and_validate_instruction(
+        &buy_offer_ix(),
+        &after_listing(None),
+        &[Check::success()],
+    );
+
+    assert_eq!(token_balance(&result, &BUYER_BOND), LOT, "лот не доїхав");
+    assert_eq!(
+        token_balance(&result, &BUYER_USDC),
+        BUYER_CASH - PRICE,
+        "покупець заплатив не ціну оферти"
+    );
+    assert_eq!(
+        token_balance(&result, &SELLER_USDC),
+        to_seller(PRICE),
+        "продавцеві дісталось не те, що лишається після комісії"
+    );
+    assert_eq!(
+        token_balance(&result, &FEE_VAULT),
+        fee_of(PRICE),
+        "комісія протоколу порахована не за його ж ставкою"
+    );
+}
+
+/// Викуплена оферта не має статусу — її просто більше немає: обидва її рахунки
+/// закриті, і оренда, яку вносив продавець, повернулась йому. Без цього в
+/// ланцюгу лишався б акаунт, який виглядає як чинна оферта з порожнім сховищем.
+#[test]
+fn an_offer_bought_is_an_offer_gone() {
+    let before = after_listing(None);
+    let seller_before = before
+        .iter()
+        .find(|(key, _)| *key == INVESTOR)
+        .map(|(_, account)| account.lamports)
+        .expect("продавець є у світі");
+
+    let result =
+        setup().process_and_validate_instruction(&buy_offer_ix(), &before, &[Check::success()]);
+
+    assert_eq!(lamports_of(&result, &offer_key()), 0, "оферта лишилась");
+    assert_eq!(lamports_of(&result, &escrow_key()), 0, "сховище лишилось");
+    assert_eq!(
+        lamports_of(&result, &proceeds_key()),
+        0,
+        "тимчасовий USDC-рахунок лишився"
+    );
+    assert!(
+        lamports_of(&result, &INVESTOR) > seller_before,
+        "оренда не повернулась продавцеві"
+    );
+}
+
+/// `FR-038`: покупцеві облік відкривається в тій самій транзакції. Без нього
+/// гук відмовив би, і купівля впала б цілком — тому це не зручність, а умова
+/// того, що вторинка взагалі працює.
+#[test]
+fn the_buyer_gets_a_ledger_opened_in_the_same_transaction() {
+    let result = setup().process_and_validate_instruction(
+        &buy_offer_ix(),
+        &after_listing(None),
+        &[Check::success()],
+    );
+
+    let buyer = holder(&result, BUYER);
+    assert_eq!(buyer.owner, anchor_key(BUYER));
+    assert_eq!(
+        buyer.index_at_checkpoint, INDEX,
+        "свіжий облік мусить починатись від сьогоднішнього індексу"
+    );
+    assert_eq!(
+        buyer.accrued, 0,
+        "покупцеві нараховано те, чого він не тримав"
+    );
+}
+
+/// Найтонше місце вторинки. Поки оферта стоїть, бонд лежить у сховищі — і
+/// виплати за нього набігають на облік **сховища**, а не продавця. Належать
+/// вони продавцеві: доки оферту не викупили, він міг її скасувати й забрати
+/// бонд назад. Тому викуп віддає йому і ціну, і те, що набігло.
+///
+/// Без цього кроку 240 USDC лишились би на обліку PDA, який після викупу
+/// перестає існувати, — тобто зникли б для всіх.
+#[test]
+fn what_accrued_while_the_offer_stood_goes_to_the_seller() {
+    // Поки оферта стояла, прийшло ще стільки ж: індекс подвоївся.
+    let moved = (PAID_IN * 2, INDEX * 2);
+    // Частка лота за цей проміжок: (96e9 − 48e9) × 5e9 / 1e12.
+    let accrued = 240_000_000;
+
+    let result = setup().process_and_validate_instruction(
+        &buy_offer_ix(),
+        &after_listing(Some(moved)),
+        &[Check::success()],
+    );
+
+    assert_eq!(
+        token_balance(&result, &SELLER_USDC),
+        to_seller(PRICE) + accrued,
+        "накопичене за час оферти не дійшло до продавця"
+    );
+    assert_eq!(
+        token_balance(&result, &ESCROW_VAULT),
+        moved.0 - accrued,
+        "зі сховища погашення пішла не та сума"
+    );
+
+    // Покупець платить ту саму ціну: накопичене — не його справа.
+    assert_eq!(token_balance(&result, &BUYER_USDC), BUYER_CASH - PRICE);
+
+    // І забирає він бонд із чистим обліком: усе, що було до нього, уже
+    // виплачене, а його власний відлік починається з цього індексу.
+    let buyer = holder(&result, BUYER);
+    assert_eq!(buyer.accrued, 0);
+    assert_eq!(buyer.index_at_checkpoint, moved.1);
+}
+
+/// Гроші йдуть тому, кого назвала оферта, і туди, куди показує протокол.
+/// Підмінити продавця — це забрати чужий лот за свої гроші; підмінити
+/// скарбницю — це забрати комісію протоколу собі.
+#[test]
+fn neither_the_seller_nor_the_fee_vault_can_be_swapped() {
+    let outsider_usdc = Pubkey::new_from_array([75u8; 32]);
+
+    for (what, metas) in [
+        ("продавця", (5usize, OUTSIDER)),
+        ("скарбницю комісій", (13usize, outsider_usdc)),
+    ] {
+        println!("підміна: {what}");
+
+        let mut instruction = buy_offer_ix();
+        instruction.accounts[metas.0].pubkey = metas.1;
+
+        let world = {
+            let mut accounts = after_listing(None);
+            accounts.push((OUTSIDER, wallet()));
+            accounts.push((outsider_usdc, usdc_account(OUTSIDER, 0)));
+            accounts
+        };
+
+        let result = setup().process_instruction(&instruction, &world);
+
+        assert!(
+            !result.program_result.is_ok(),
+            "підміна пройшла: {:?}",
+            result.program_result
+        );
+    }
+}
+
+// ---- Скасування (`FR-027`) -------------------------------------------------
+
+/// Чужі рахунки для спроби скасувати не свою оферту. Вони потрібні саме тому,
+/// що без них тест упав би на `token::authority` і нічого не сказав би про
+/// власника оферти.
+const OUTSIDER_BOND: Pubkey = Pubkey::new_from_array([76u8; 32]);
+const OUTSIDER_USDC: Pubkey = Pubkey::new_from_array([77u8; 32]);
+
+fn anchor_err(code: anchor_lang::error::ErrorCode) -> Check<'static> {
+    Check::err(ProgramError::Custom(u32::from(code)))
+}
+
+/// Скасування в тому вигляді, в якому його подає продавець. Порядок —
+/// оголошення `CancelOffer`.
+fn cancel_offer_ix() -> Instruction {
+    Instruction::new_with_bytes(
+        market_id(),
+        &daddys_market::instruction::CancelOffer {}.data(),
+        vec![
+            AccountMeta::new_readonly(demo_issue(), false),
+            AccountMeta::new(offer_key(), false),
+            AccountMeta::new(escrow_key(), false),
+            AccountMeta::new(proceeds_key(), false),
+            AccountMeta::new(INVESTOR, true),
+            AccountMeta::new(SELLER_BOND, false),
+            AccountMeta::new(SELLER_USDC, false),
+            AccountMeta::new(holder_pda(demo_issue(), INVESTOR).0, false),
+            AccountMeta::new(holder_pda(demo_issue(), offer_key()).0, false),
+            AccountMeta::new(ESCROW_VAULT, false),
+            AccountMeta::new_readonly(BOND_MINT, false),
+            AccountMeta::new_readonly(USDC_MINT, false),
+            AccountMeta::new_readonly(extra_metas_pda(BOND_MINT).0, false),
+            AccountMeta::new_readonly(club_id(), false),
+            AccountMeta::new_readonly(token_program().0, false),
+            AccountMeta::new_readonly(system_program().0, false),
+        ],
+    )
+}
+
+fn lamports_in(world: &[(Pubkey, Account)], key: Pubkey) -> u64 {
+    world
+        .iter()
+        .find(|(existing, _)| *existing == key)
+        .map(|(_, account)| account.lamports)
+        .expect("акаунт є у світі")
+}
+
+/// `FR-027`: передумати — це не угода, тому лот повертається цілим. Протокол
+/// заробляє на купівлі (`FR-035`) і тільки на ній: скарбниці комісій у наборі
+/// акаунтів скасування немає взагалі — не «ставка нульова», а нікуди її взяти.
+#[test]
+fn cancelling_returns_the_whole_lot_and_charges_nothing() {
+    assert!(
+        !cancel_offer_ix()
+            .accounts
+            .iter()
+            .any(|meta| meta.pubkey == FEE_VAULT),
+        "скарбниця комісій потрапила в набір скасування"
+    );
+
+    let result = setup().process_and_validate_instruction(
+        &cancel_offer_ix(),
+        &after_listing(None),
+        &[Check::success()],
+    );
+
+    assert_eq!(
+        token_balance(&result, &SELLER_BOND),
+        BALANCE,
+        "продавцеві повернувся не весь лот"
+    );
+    assert_eq!(
+        token_balance(&result, &SELLER_USDC),
+        0,
+        "за скасування з продавця щось узяли або йому щось доплатили"
+    );
+}
+
+/// Те саме найтонше місце, що й у викупі, лише з іншого боку. Поки оферта
+/// стоїть, виплати набігають на облік **сховища**; якби скасування їх не
+/// забирало, «повертає повністю» було б неправдою — бонд повернувся б, а плата
+/// за час, поки він стояв на продажу, лишилась би на обліку PDA, який тією ж
+/// інструкцією перестає бути комусь потрібним.
+#[test]
+fn what_accrued_while_the_offer_stood_comes_back_with_the_lot() {
+    // Поки оферта стояла, прийшло ще стільки ж: індекс подвоївся.
+    let moved = (PAID_IN * 2, INDEX * 2);
+    // Частка лота за цей проміжок: (96e9 − 48e9) × 5e9 / 1e12.
+    let accrued = 240_000_000;
+
+    let result = setup().process_and_validate_instruction(
+        &cancel_offer_ix(),
+        &after_listing(Some(moved)),
+        &[Check::success()],
+    );
+
+    assert_eq!(token_balance(&result, &SELLER_BOND), BALANCE);
+    assert_eq!(
+        token_balance(&result, &SELLER_USDC),
+        accrued,
+        "накопичене за час оферти не дійшло до продавця"
+    );
+    assert_eq!(
+        token_balance(&result, &ESCROW_VAULT),
+        moved.0 - accrued,
+        "зі сховища погашення пішла не та сума"
+    );
+
+    // Друга половина позиції весь цей час була на руках, і нараховане за неї
+    // нікуди не зникло: воно лежить на обліку продавця й чекає свого `claim`.
+    // Разом із 480 USDC, які туди поклало саме виставлення.
+    let seller = holder(&result, INVESTOR);
+    assert_eq!(
+        seller.accrued,
+        OWED + accrued,
+        "скасування зачепило те, що продавець заробив поза офертою"
+    );
+    assert_eq!(seller.index_at_checkpoint, moved.1);
+}
+
+/// `has_one = seller` і є тим замком, через який чужу оферту не скасувати.
+/// Чужинець приходить із власними рахунками — саме тому, що інакше відмова
+/// прийшла б від `token::authority` і про власника оферти не сказала б нічого.
+#[test]
+fn a_stranger_cannot_cancel_an_offer_they_did_not_place() {
+    let stranger_ledger = holder_pda(demo_issue(), OUTSIDER).0;
+
+    let mut instruction = cancel_offer_ix();
+    instruction.accounts[4].pubkey = OUTSIDER;
+    instruction.accounts[5].pubkey = OUTSIDER_BOND;
+    instruction.accounts[6].pubkey = OUTSIDER_USDC;
+    instruction.accounts[7].pubkey = stranger_ledger;
+
+    let mut world = after_listing(None);
+    world.extend([
+        (OUTSIDER, wallet()),
+        (OUTSIDER_BOND, bond_account(OUTSIDER, 0)),
+        (OUTSIDER_USDC, usdc_account(OUTSIDER, 0)),
+        (stranger_ledger, anchor_account(&ledger(OUTSIDER, INDEX))),
+    ]);
+
+    let result = setup().process_and_validate_instruction(
+        &instruction,
+        &world,
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
+    );
+
+    assert_eq!(
+        token_balance(&result, &escrow_key()),
+        LOT,
+        "лот пішов зі сховища попри відмову"
+    );
+    assert_eq!(token_balance(&result, &OUTSIDER_BOND), 0);
+}
+
+/// Скасована оферта, як і викуплена, не має статусу — її немає. Обидва її
+/// рахунки закриті, і оренда за них повернулась тому, хто її вносив: тут це
+/// продавець, і за сховище бонду, і за тимчасовий USDC-рахунок.
+#[test]
+fn a_cancelled_offer_is_an_offer_gone() {
+    let before = after_listing(None);
+    let seller_before = lamports_in(&before, INVESTOR);
+    // Тимчасовий USDC-рахунок у цю суму не входить навмисно: продавець і
+    // вносить за нього оренду, і отримує її назад у тій самій інструкції.
+    let rent_back = lamports_in(&before, offer_key()) + lamports_in(&before, escrow_key());
+    assert!(rent_back > 0, "у світі до скасування оферти не було");
+
+    let result =
+        setup().process_and_validate_instruction(&cancel_offer_ix(), &before, &[Check::success()]);
+
+    assert_eq!(lamports_of(&result, &offer_key()), 0, "оферта лишилась");
+    assert_eq!(lamports_of(&result, &escrow_key()), 0, "сховище лишилось");
+    assert_eq!(
+        lamports_of(&result, &proceeds_key()),
+        0,
+        "тимчасовий USDC-рахунок лишився"
+    );
+    assert_eq!(
+        lamports_of(&result, &INVESTOR),
+        seller_before + rent_back,
+        "оренда повернулась не вся або не продавцеві"
+    );
+}
+
+/// Скасувати двічі нічого не вийде, і доводить це не прапорець, а те, що
+/// оферти вже немає: другий виклик приходить у порожній акаунт. Саме тому
+/// `OfferNotActive` у `MarketError` і не знадобилась.
+#[test]
+fn an_offer_cancelled_once_cannot_be_cancelled_again() {
+    let before = after_listing(None);
+    let mollusk = setup();
+    let cancelled =
+        mollusk.process_and_validate_instruction(&cancel_offer_ix(), &before, &[Check::success()]);
+
+    let after = before
+        .into_iter()
+        .map(|(key, account)| match cancelled.get_account(&key) {
+            Some(updated) => (key, updated.clone()),
+            None => (key, account),
+        })
+        .collect::<Vec<_>>();
+
+    mollusk.process_and_validate_instruction(
+        &cancel_offer_ix(),
+        &after,
+        &[anchor_err(
+            anchor_lang::error::ErrorCode::AccountNotInitialized,
+        )],
     );
 }
