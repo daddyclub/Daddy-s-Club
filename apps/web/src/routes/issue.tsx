@@ -23,9 +23,9 @@ import RepaymentBoard from '@/components/RepaymentBoard';
 import Section from '@/components/Section';
 import { useIssueAccount } from '@/hooks/useIssueAccount';
 import { webEnv } from '@/lib/env';
+import { amount, bps, clock, instant, percent, share } from '@/lib/format';
 import { fromBaseUnits, type IssueSnapshot, repaymentView } from '@/lib/issue-feed';
 import { sharedFeed } from '@/lib/rpc';
-import { amount, bps, clock, instant, percent, share } from '@/lib/format';
 
 /**
  * Стани показуються тими іменами, які носить сам ланцюг. Демо-дошка M0 звe їх
@@ -241,7 +241,13 @@ const LiveCard = ({ address, snapshot }: LiveCardProps) => {
         </NoticePanel>
       </div>
 
-      <div className="mt-6">
+      <div className="mt-6 flex flex-wrap gap-6">
+        <Link
+          to={`/live/issue/${address.toBase58()}/offers`}
+          className="border-b border-board-accent text-[11px] uppercase tracking-[0.2em] text-board-accent"
+        >
+          Secondary offers
+        </Link>
         <Link
           to="/live/issue"
           className="border-b border-board-accent text-[11px] uppercase tracking-[0.2em] text-board-accent"

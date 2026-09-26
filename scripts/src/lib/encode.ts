@@ -24,7 +24,6 @@ export const CLUB_PROGRAM = new PublicKey('7eT5T7mq1uD9piYJ2rMAzma8iYL7C7CZGPgxs
 /** Program ID референсного емітента — `programs/demo-issuer/src/lib.rs`. */
 export const DEMO_PROGRAM = new PublicKey('8wKjGiLvnMTv7oi9PcztmbRv4v63emT2qPPrA8x1fW3z');
 export const TOKEN_2022 = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
-export const ATA_PROGRAM = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 export const SYSTEM_PROGRAM = SystemProgram.programId;
 
 /** Дискримінатор інструкції Anchor — 8 байт `sha256("global:" + ім'я)`. */
@@ -154,34 +153,11 @@ export function mintTo(
   return instruction(TOKEN_2022, [rw(mint), rw(destination), signer(authority)], data);
 }
 
-/** Адреса асоційованого рахунка. Власник може бути PDA — це не заборонено. */
-export function associatedTokenAddress(owner: PublicKey, mint: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [owner.toBytes(), TOKEN_2022.toBytes(), mint.toBytes()],
-    ATA_PROGRAM,
-  )[0];
-}
-
 /**
- * Створення асоційованого рахунка, ідемпотентне.
- *
- * Саме ним створюються рахунки бонду: мінт випуску несе `TransferHook`, тому
- * його рахунки мусять мати розширення `TransferHookAccount`, і розмір під нього
- * рахує сама ATA-програма. Рахунок, зроблений «на 165 байтів», Token-2022 при
- * першому ж переказі відхилив би.
+ * ATA живуть у SDK: веб створює ті самі рахунки з тих самих функцій, і двох
+ * копій деривації бути не повинно.
  */
-export function createAssociatedTokenAccountIdempotent(
-  payer: PublicKey,
-  owner: PublicKey,
-  mint: PublicKey,
-): { address: PublicKey; instruction: TransactionInstruction } {
-  const address = associatedTokenAddress(owner, mint);
-  return {
-    address,
-    instruction: instruction(
-      ATA_PROGRAM,
-      [signerRw(payer), rw(address), ro(owner), ro(mint), ro(SYSTEM_PROGRAM), ro(TOKEN_2022)],
-      Buffer.from([1]),
-    ),
-  };
-}
+export {
+  associatedTokenAddress,
+  createAssociatedTokenAccountIdempotent,
+} from '../../../packages/sdk/src/token.ts';

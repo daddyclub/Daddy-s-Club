@@ -14,7 +14,7 @@
  * прибуття.
  */
 
-import { Connection, type PublicKey } from '@solana/web3.js';
+import { Connection, type GetProgramAccountsFilter, type PublicKey } from '@solana/web3.js';
 
 /** Акаунт так, як його віддає вузол: власник відомий, вміст — ще ні. */
 export interface RawAccount {
@@ -81,13 +81,91 @@ export function feedFromConnection(connection: Connection): AccountFeed {
   };
 }
 
+/** Акаунт програми разом з адресою — рядок вибірки. */
+export interface KeyedAccount {
+  readonly address: PublicKey;
+  readonly account: RawAccount;
+}
+
+/**
+ * Вибірка акаунтів програми — те, що заміняє індексатор (`FR-023`). Стакан
+ * оферт тримається на ній і на підписці, як картка — на `AccountFeed`.
+ */
+export interface ProgramFeed {
+  /** Разова вибірка за фільтрами, разом зі слотом, на якому її зроблено. */
+  list(
+    programId: PublicKey,
+    filters: GetProgramAccountsFilter[],
+  ): Promise<{ readonly slot: number; readonly accounts: readonly KeyedAccount[] }>;
+  /**
+   * Підписка на зміни акаунтів програми, що проходять фільтри. **Закриття
+   * вона не бачить**: занулені дані фільтр уже не пропускає, тож про зниклий
+   * акаунт вузол просто мовчить. Зникнення ловить `AccountFeed.watch`.
+   */
+  watch(
+    programId: PublicKey,
+    filters: GetProgramAccountsFilter[],
+    onAccount: (address: PublicKey, snapshot: AccountSnapshot) => void,
+  ): () => void;
+}
+
+export function programFeedFromConnection(connection: Connection): ProgramFeed {
+  return {
+    async list(programId, filters) {
+      const response = await connection.getProgramAccounts(programId, {
+        commitment: COMMITMENT,
+        filters,
+        withContext: true,
+      });
+      return {
+        slot: response.context.slot,
+        accounts: response.value.map(({ pubkey, account }) => ({
+          address: pubkey,
+          account: { owner: account.owner, data: account.data },
+        })),
+      };
+    },
+
+    watch(programId, filters, onAccount) {
+      const id = connection.onProgramAccountChange(
+        programId,
+        ({ accountId, accountInfo }, context) => {
+          onAccount(accountId, {
+            slot: context.slot,
+            account: { owner: accountInfo.owner, data: accountInfo.data },
+          });
+        },
+        { commitment: COMMITMENT, filters },
+      );
+      return () => {
+        void connection.removeProgramAccountChangeListener(id).catch(() => undefined);
+      };
+    },
+  };
+}
+
 let shared: AccountFeed | null = null;
 
 /**
  * Спільне з'єднання застосунку. Створюється лінькаво: модуль, який читає
  * конфігурацію при завантаженні, тягне її і в тести, яким вона не потрібна.
  */
+let sharedConnectionValue: Connection | null = null;
+
+/** Одне з'єднання на застосунок: і для читань, і для відправки транзакцій. */
+export function sharedConnection(rpcUrl: string): Connection {
+  sharedConnectionValue ??= new Connection(rpcUrl, COMMITMENT);
+  return sharedConnectionValue;
+}
+
 export function sharedFeed(rpcUrl: string): AccountFeed {
-  shared ??= feedFromConnection(new Connection(rpcUrl, COMMITMENT));
+  shared ??= feedFromConnection(sharedConnection(rpcUrl));
   return shared;
+}
+
+let sharedProgram: ProgramFeed | null = null;
+
+export function sharedProgramFeed(rpcUrl: string): ProgramFeed {
+  sharedProgram ??= programFeedFromConnection(sharedConnection(rpcUrl));
+  return sharedProgram;
 }

@@ -12,7 +12,11 @@
   },
   "dependencies": {
     "@daddys-club/sdk": "workspace:^",
+    "@solana/wallet-standard-features": "^1.5.0",
     "@solana/web3.js": "^1.98.4",
+    "@wallet-standard/app": "^1.1.1",
+    "@wallet-standard/base": "^1.1.1",
+    "@wallet-standard/features": "^1.1.1",
     "buffer": "^6.0.3",
     "clsx": "^2.1.1",
     "react": "^18.3.1",

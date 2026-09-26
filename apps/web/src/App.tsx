@@ -5,6 +5,7 @@ import IssuerDashboard from '@/pages/IssuerDashboard';
 import Marketplace from '@/pages/Marketplace';
 import NotFound from '@/pages/NotFound';
 import IssueRoute from '@/routes/issue';
+import OffersRoute from '@/routes/offers';
 
 /**
  * Підпис унизу сторінки. Демо-дошка M0 стоїть на вигаданих числах і мусить це
@@ -35,6 +36,7 @@ const App = () => (
             числах, тому шляхи розведені; злиття — на T045. */}
         <Route path="/live/issue" element={<IssueRoute />} />
         <Route path="/live/issue/:address" element={<IssueRoute />} />
+        <Route path="/live/issue/:address/offers" element={<OffersRoute />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </main>

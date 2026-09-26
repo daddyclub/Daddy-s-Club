@@ -7,7 +7,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "measure:sc002": "node src/measure-sc002.ts",
-    "demo": "node src/demo.ts"
+    "demo": "node src/demo.ts",
+    "measure:sc009": "node src/measure-sc009.ts"
   },
   "dependencies": {
     "@daddys-club/sdk": "workspace:^",
@@ -15,8 +16,9 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/node": "^26.3.0",
+    "playwright-core": "^1.63.0",
     "typescript": "^5.9.0",
-    "vitest": "^3.2.0",
-    "@types/node": "^26.3.0"
+    "vitest": "^3.2.0"
   }
 }

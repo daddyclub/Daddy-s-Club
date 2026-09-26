@@ -17,7 +17,14 @@
 
 import { PublicKey, SystemProgram, TransactionInstruction } from '@solana/web3.js';
 import { z } from 'zod';
-import type { Issue, Offer, ProtocolConfig } from './accounts.js';
+import {
+  DISCRIMINATOR_LEN,
+  discriminatorFilter,
+  type Issue,
+  type Offer,
+  type ProtocolConfig,
+} from './accounts.js';
+import { pledgedShare } from './math.js';
 import {
   configPda,
   extraAccountMetasPda,
@@ -29,9 +36,7 @@ import {
   offerProceedsPda,
   PROGRAM_ID,
 } from './pda.js';
-
-/** Token-2022. Бонд і USDC обидва живуть у ньому: `token_program` у наборах один. */
-export const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+import { TOKEN_2022_PROGRAM_ID } from './token.js';
 
 export type MarketInstruction = 'create_offer' | 'buy_offer' | 'cancel_offer';
 
@@ -359,4 +364,38 @@ export async function findFreeOfferNonce(
     if (nonce !== undefined) return nonce;
   }
   throw new Error('у продавця зайняті всі слоти оферт');
+}
+
+/**
+ * Торгова комісія лота (`FR-035`) — `trading_fee` у `daddys-market`:
+ * `price × bps / 10 000` з округленням вниз. Арифметика та сама, що в
+ * `pledgedShare`, тому й код той самий; окреме ім'я — щоб місце виклику казало,
+ * що рахується. `null` — аргумент поза u64/u16, як усюди в `math.ts`.
+ */
+export function tradingFee(price: bigint, feeBps: number): bigint | null {
+  if (price < 0n || price > U64_MAX) return null;
+  return pledgedShare(price, feeBps);
+}
+
+/** Що отримає продавець за лот: ціна мінус комісія. Покупець платить рівно `price`. */
+export function sellerProceeds(price: bigint, feeBps: number): bigint | null {
+  const fee = tradingFee(price, feeBps);
+  return fee === null ? null : price - fee;
+}
+
+/** Зсув поля `issue` в акаунті `Offer`: після дискримінатора і `seller`. */
+export const OFFER_ISSUE_OFFSET = DISCRIMINATOR_LEN + 32;
+
+/**
+ * Фільтри `getProgramAccounts` для всіх оферт випуску. Індексатора немає
+ * (`FR-023`), тому стакан — це вибірка акаунтів ринку: спершу за типом, потім
+ * за полем `issue`.
+ */
+export function offerFilters(
+  issue: PublicKey,
+): (ReturnType<typeof discriminatorFilter> | { memcmp: { offset: number; bytes: string } })[] {
+  return [
+    discriminatorFilter('Offer'),
+    { memcmp: { offset: OFFER_ISSUE_OFFSET, bytes: issue.toBase58() } },
+  ];
 }

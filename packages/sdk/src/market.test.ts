@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { PublicKey, SystemProgram, type TransactionInstruction } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
-import type { Issue, Offer, ProtocolConfig } from './accounts.js';
+import { discriminatorFilter, type Issue, type Offer, type ProtocolConfig } from './accounts.js';
 import {
   type AccountSlot,
   type AccountsReader,
@@ -29,7 +29,10 @@ import {
   findFreeOfferNonce,
   INSTRUCTION_DISCRIMINATORS,
   type MarketInstruction,
-  TOKEN_2022_PROGRAM_ID,
+  OFFER_ISSUE_OFFSET,
+  offerFilters,
+  sellerProceeds,
+  tradingFee,
 } from './market.js';
 import {
   configPda,
@@ -42,9 +45,14 @@ import {
   offerProceedsPda,
   PROGRAM_ID,
 } from './pda.js';
+import { TOKEN_2022_PROGRAM_ID } from './token.js';
 
 const marketRs = readFileSync(
   new URL('../../../programs/daddys-market/src/instructions/market.rs', import.meta.url),
+  'utf8',
+);
+const marketStateRs = readFileSync(
+  new URL('../../../programs/daddys-market/src/state.rs', import.meta.url),
   'utf8',
 );
 const marketLibRs = readFileSync(
@@ -434,5 +442,42 @@ describe('findFreeOfferNonce — найменший вільний слот', ()
     };
     await expect(findFreeOfferNonce(short, ISSUE, SELLER)).rejects.toThrow();
     await expect(findFreeOfferNonce(junk, ISSUE, SELLER)).rejects.toThrow();
+  });
+});
+
+describe('tradingFee — дзеркало trading_fee у daddys-market', () => {
+  it('формула в програмі — та сама: price × bps / BPS_DENOM', () => {
+    expect(marketRs).toMatch(
+      /fn trading_fee\(price: u128, fee_bps: u16\)[\s\S]*?checked_mul\(u128::from\(fee_bps\)\)[\s\S]*?checked_div\(math::BPS_DENOM\)/,
+    );
+  });
+
+  it('округлення вниз: залишок лишається продавцеві', () => {
+    expect(tradingFee(4_900_000_000n, 50)).toBe(24_500_000n);
+    expect(tradingFee(199n, 50)).toBe(0n);
+    expect(tradingFee(200n, 50)).toBe(1n);
+    expect(sellerProceeds(4_900_000_000n, 50)).toBe(4_875_500_000n);
+  });
+
+  it('поза u64 чи u16 — null, а не число', () => {
+    expect(tradingFee(1n << 64n, 50)).toBeNull();
+    expect(tradingFee(-1n, 50)).toBeNull();
+    expect(tradingFee(1n, 70_000)).toBeNull();
+    expect(sellerProceeds(1n << 64n, 50)).toBeNull();
+  });
+});
+
+describe('offerFilters — стакан випуску без індексатора', () => {
+  it('issue лежить одразу після seller, як оголошено в state.rs', () => {
+    const offerStruct = marketStateRs.slice(marketStateRs.indexOf('pub struct Offer {'));
+    const fields = [...offerStruct.matchAll(/pub (\w+): (\w+),/g)].map((m) => `${m[1]}: ${m[2]}`);
+    expect(fields.slice(0, 2)).toEqual(['seller: Pubkey', 'issue: Pubkey']);
+    expect(OFFER_ISSUE_OFFSET).toBe(8 + 32);
+  });
+
+  it('тип за дискримінатором, випуск за полем', () => {
+    const [byKind, byIssue] = offerFilters(ISSUE);
+    expect(byKind).toEqual(discriminatorFilter('Offer'));
+    expect(byIssue).toEqual({ memcmp: { offset: OFFER_ISSUE_OFFSET, bytes: ISSUE.toBase58() } });
   });
 });
