@@ -778,3 +778,75 @@ fn an_offer_cancelled_once_cannot_be_cancelled_again() {
         )],
     );
 }
+
+/// `nonce` — номер слота, а не лічильник. Облік сховища переживає свою оферту,
+/// тому друге виставлення з тим самим `nonce` дешевше рівно на його оренду.
+/// Рішення від 2026-09-24, docs/PLAN.md → «Модель даних» → `Offer`.
+#[test]
+fn the_ledger_of_a_gone_offer_is_reused_by_the_next_one() {
+    let ledger_key = holder_pda(demo_issue(), offer_key()).0;
+    let mollusk = setup();
+
+    // --- перше виставлення
+    let before1 = market_world();
+    let listed1 = mollusk.process_and_validate_instruction(
+        &create_offer_ix(LOT, PRICE),
+        &before1,
+        &[Check::success()],
+    );
+    let cost1 = lamports_in(&before1, INVESTOR) - lamports_of(&listed1, &INVESTOR);
+    let ledger_rent = lamports_of(&listed1, &ledger_key);
+    println!("оренда обліку сховища = {ledger_rent} лампортів");
+    println!("перше виставлення коштувало {cost1}");
+
+    let apply = |world: Vec<(Pubkey, Account)>, result: &InstructionResult| {
+        world
+            .into_iter()
+            .map(|(key, account)| match result.get_account(&key) {
+                Some(updated) => (key, updated.clone()),
+                None => (key, account),
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // --- скасування
+    let after_listing1 = apply(market_world(), &listed1);
+    let cancelled = mollusk.process_and_validate_instruction(
+        &cancel_offer_ix(),
+        &after_listing1,
+        &[Check::success()],
+    );
+    let after_cancel = apply(after_listing1, &cancelled);
+
+    println!(
+        "після скасування: оферта = {}, сховище = {}, облік = {}",
+        lamports_in(&after_cancel, offer_key()),
+        lamports_in(&after_cancel, escrow_key()),
+        lamports_in(&after_cancel, ledger_key)
+    );
+
+    // --- друге виставлення з тим самим nonce
+    let listed2 = mollusk.process_and_validate_instruction(
+        &create_offer_ix(LOT, PRICE),
+        &after_cancel,
+        &[Check::success()],
+    );
+    let cost2 = lamports_in(&after_cancel, INVESTOR) - lamports_of(&listed2, &INVESTOR);
+    println!("друге виставлення коштувало {cost2}");
+    println!("різниця = {}", cost1 - cost2);
+
+    assert_eq!(
+        cost1 - cost2,
+        ledger_rent,
+        "друге виставлення мало б зекономити рівно оренду обліку"
+    );
+    assert_eq!(token_balance(&listed2, &escrow_key()), LOT);
+
+    // Облік перевикористаний — і він чистий: гук звів його на нулі балансу.
+    let escrow = holder(&listed2, offer_key());
+    assert_eq!(
+        escrow.accrued, 0,
+        "у перевикористаному обліку лишився хвіст"
+    );
+    assert_eq!(escrow.index_at_checkpoint, INDEX);
+}
