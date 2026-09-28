@@ -10,7 +10,7 @@ own. Bonds trade until maturity.
 
 No token dilution, no user funds as collateral, no credit committee.
 
-## Status — v0.1.0, the first working bond
+## Status — v0.2.0, a way out before maturity
 
 What ships:
 
@@ -26,16 +26,32 @@ What ships:
   holders.
 - **Repayment ends by itself** once face plus coupon is covered; the issuer
   can also buy the flow back early in one payment.
-- **A read-only web app**: marketplace, issue detail and the issuer dashboard,
-  with the repayment counter updating live from the chain.
-- **A demo script** that walks the whole cycle on a local validator.
+- **Bonds change hands without losing what they earned.** The transfer hook
+  settles both sides at the moment before every transfer — including one
+  sent from any wallet app, past this interface — so what accrued before a
+  sale stays with the seller and the buyer earns from the purchase on. Bonds
+  can only land on a wallet whose position is open.
+- **A secondary market** in its own program: a holder lists part of a
+  position at a fixed price into an offer escrow, another wallet buys it for
+  USDC in one instruction (the protocol takes a trading fee), or the seller
+  cancels and gets the whole lot back. What accrues while an offer stands is
+  forwarded to the seller.
+- **A web app**: marketplace, issue detail and the issuer dashboard, with the
+  repayment counter updating live from the chain, and a screen for offers
+  where a Wallet Standard wallet lists, buys and cancels.
+- **Scripts** that walk the whole cycle on a local validator and measure it.
+
+Measured: the money adds up to the smallest USDC unit after every step of
+1,000 random sequences of fee arrivals, claims, transfers and sales, and no
+holder ever takes more than their bonds earned; from listing to USDC on the
+seller's screen takes 1.3 s on a local validator.
 
 What does not exist yet:
 
-- a secondary market — offers and the web flow around them; bond transfers
-  already settle both sides' checkpoints through the transfer hook;
+- a catalogue of issues and risk metrics for the issuer — buying a bond is
+  possible, judging whose it is is not;
 - an admission threshold — in this version anyone can create an issue;
-- signing transactions from the web app.
+- a deployment to a public cluster.
 
 One issuer, and it is our own demo issuer.
 
@@ -53,10 +69,11 @@ Solana accounts, and the interface reads them straight over RPC.
 ```
 programs/daddys-club   core: protocol config, revenue sources, issuance, escrows,
                        interception, payout; the bond mint carries the transfer hook
+programs/daddys-market secondary market: offers, purchase and cancellation
 programs/demo-issuer   reference integration: a swap that hands over a share of its fee
 packages/sdk           types, PDA derivations, account decoders, mirror of the arithmetic
-apps/web               marketplace, issue detail, issuer dashboard
-scripts                the full-cycle demo and the SC-002 measurement on a live node
+apps/web               marketplace, issue detail, issuer dashboard, offers
+scripts                the full-cycle demo and the SC-002 / SC-009 measurements on a live node
 fixtures               shared arithmetic fixtures for Rust ↔ TypeScript
 ```
 
@@ -65,17 +82,17 @@ fixtures               shared arithmetic fixtures for Rust ↔ TypeScript
 ```bash
 pnpm install
 pnpm gate                    # lint + typecheck + TypeScript tests
-anchor build                 # both programs
+anchor build                 # all three programs
 cargo test -p daddys-club    # program tests on mollusk-svm; needs anchor build first
 ```
 
-The program tests load the freshly built bytecode of both programs, so
+The program tests load the freshly built bytecode of all three programs, so
 `anchor build` has to run before `cargo test`.
 
 Copy `.env.example` to `.env` and set the RPC endpoint for your cluster; the
 defaults point at a local validator. The web app is started with `pnpm dev`.
 
-To see the whole cycle end to end — a local validator with both programs, the
+To see the whole cycle end to end — a local validator with the programs, the
 demo issuer generating fees, holders getting paid — see
 [scripts/README.md](scripts/README.md).
 

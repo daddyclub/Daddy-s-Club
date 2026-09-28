@@ -1067,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "daddys-club"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
@@ -1094,7 +1094,7 @@ dependencies = [
 
 [[package]]
 name = "daddys-market"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
@@ -1169,7 +1169,7 @@ dependencies = [
 
 [[package]]
 name = "demo-issuer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
