@@ -8,7 +8,9 @@
     "test": "vitest run --passWithNoTests",
     "measure:sc002": "node src/measure-sc002.ts",
     "demo": "node src/demo.ts",
-    "measure:sc009": "node src/measure-sc009.ts"
+    "measure:sc009": "node src/measure-sc009.ts",
+    "init:devnet": "node src/init-devnet.ts",
+    "seed:devnet": "node src/seed-devnet.ts"
   },
   "dependencies": {
     "@daddys-club/sdk": "workspace:^",

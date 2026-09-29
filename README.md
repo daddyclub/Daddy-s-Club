@@ -44,14 +44,14 @@ What ships:
 Measured: the money adds up to the smallest USDC unit after every step of
 1,000 random sequences of fee arrivals, claims, transfers and sales, and no
 holder ever takes more than their bonds earned; from listing to USDC on the
-seller's screen takes 1.3 s on a local validator.
+seller's screen takes 1.3 s on a local validator and 3.0 s on devnet; the
+whole issuance-to-payout cycle runs in 16.4 s of machine time on devnet.
 
 What does not exist yet:
 
 - a catalogue of issues and risk metrics for the issuer — buying a bond is
   possible, judging whose it is is not;
-- an admission threshold — in this version anyone can create an issue;
-- a deployment to a public cluster.
+- an admission threshold — in this version anyone can create an issue.
 
 One issuer, and it is our own demo issuer.
 
@@ -109,8 +109,37 @@ The demo screens run on built-in figures and need no configuration. The live
 screen (`/live/issue`) reads the cluster set in repository variables
 `VITE_RPC_URL`, `VITE_CLUSTER` and `VITE_PROGRAM_ID` (Settings → Secrets and
 variables → Actions → Variables). They end up in a public bundle, so an RPC
-key placed there must be restricted to the site's origin. Until the programs
-are deployed to a public cluster, leave them unset.
+key placed there must be restricted to the site's origin.
+
+### Devnet
+
+All three programs are deployed to devnet under the same IDs as in
+[`Anchor.toml`](Anchor.toml):
+
+| | Address |
+|---|---|
+| `daddys_club` | `7eT5T7mq1uD9piYJ2rMAzma8iYL7C7CZGPgxsB8DckoB` |
+| `daddys_market` | `G29gfknNBKtvpfPAjrigefg3tkX7cVXFgnd62NUtcniq` |
+| `demo_issuer` | `8wKjGiLvnMTv7oi9PcztmbRv4v63emT2qPPrA8x1fW3z` |
+| protocol config | `4HLq2cCPFRgHurFywRv24eLXxKURyz3To7FF2eGoyeg1` |
+| settlement mint (test USDC, 6 decimals) | `A2BL4NnYRAjAdDyoyVXmpM55CC1EcsX6ELsS4uHqdoYX` |
+| standing demo issue | `DQ3VtusT8kxeByCmWHyejcaSsDpbLfHFFqNjoErGXUMD` |
+
+The settlement currency is a test mint of our own, not Circle's devnet USDC:
+the demo needs amounts no faucet hands out. Visitors can watch the standing
+issue and its offer book, but have no way to get this USDC, so trading it is
+for the scripts. The repository variables for this deployment:
+
+```
+VITE_CLUSTER=devnet
+VITE_RPC_URL=https://api.devnet.solana.com
+```
+
+`VITE_PROGRAM_ID` stays unset: the IDs are the same as on localnet.
+
+`init_protocol` is open to whoever calls it first, so on devnet it was run
+straight after the deploy and the admin read back from the chain. Restricting
+it to the upgrade authority is due before mainnet.
 
 ## License
 

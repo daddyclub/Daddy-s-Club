@@ -20,13 +20,13 @@
  */
 
 import {
-  type Connection,
   ComputeBudgetProgram,
+  type Connection,
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
-  sendAndConfirmTransaction,
   SystemProgram,
+  sendAndConfirmTransaction,
   Transaction,
   type TransactionInstruction,
 } from '@solana/web3.js';
@@ -38,6 +38,7 @@ import {
   issuePda,
   sourcePda,
 } from '../../../packages/sdk/src/pda.ts';
+import { type Cluster, detectCluster } from './cluster.ts';
 import {
   Args,
   associatedTokenAddress,
@@ -51,9 +52,9 @@ import {
   mintTo,
   ro,
   rw,
+  SYSTEM_PROGRAM,
   signer,
   signerRw,
-  SYSTEM_PROGRAM,
   TOKEN_2022,
   TOKEN_ACCOUNT_SIZE,
 } from './encode.ts';
@@ -106,6 +107,7 @@ export interface InvestorWallet {
  */
 export interface WorldStage {
   readonly connection: Connection;
+  readonly cluster: Cluster;
   readonly admin: Keypair;
   readonly issuer: Keypair;
   readonly trader: Keypair;
@@ -150,10 +152,64 @@ export interface DemoWorld {
   swapInstruction(): TransactionInstruction;
 }
 
-async function fund(connection: Connection, who: PublicKey, sol: number): Promise<void> {
-  const signature = await connection.requestAirdrop(who, sol * LAMPORTS_PER_SOL);
-  const latest = await connection.getLatestBlockhash();
-  await connection.confirmTransaction({ signature, ...latest }, 'confirmed');
+/**
+ * SOL for the one-off wallets of a run. On localnet it is airdropped; devnet's
+ * faucet allows a couple of SOL a day, so there the admin pays by transfer and
+ * gets the remainder back through `reclaim`. The amounts are what a wallet
+ * spends on rent and fees in one run, with room to spare.
+ */
+const WALLET_SOL: Readonly<Record<'localnet' | 'remote', { issuer: number; other: number }>> = {
+  localnet: { issuer: 10, other: 10 },
+  remote: { issuer: 0.1, other: 0.05 },
+};
+
+async function fund(
+  connection: Connection,
+  cluster: Cluster,
+  admin: Keypair,
+  who: PublicKey,
+  sol: number,
+): Promise<void> {
+  const lamports = Math.round(sol * LAMPORTS_PER_SOL);
+  if (cluster === 'localnet') {
+    const signature = await connection.requestAirdrop(who, lamports);
+    const latest = await connection.getLatestBlockhash();
+    await connection.confirmTransaction({ signature, ...latest }, 'confirmed');
+    return;
+  }
+  await send(
+    connection,
+    [SystemProgram.transfer({ fromPubkey: admin.publicKey, toPubkey: who, lamports })],
+    [admin],
+  );
+}
+
+/**
+ * Returns what is left on the one-off wallets of a run to the admin. A no-op on
+ * localnet. Meant for a `finally`: a run that fails halfway would otherwise
+ * strand the SOL on keys nobody keeps.
+ */
+export async function reclaim(stage: WorldStage, log: (line: string) => void): Promise<void> {
+  if (stage.cluster === 'localnet') return;
+  const fee = 5_000;
+  let returned = 0;
+  for (const wallet of [stage.issuer, stage.trader, ...stage.investors.map((i) => i.keypair)]) {
+    const balance = await stage.connection.getBalance(wallet.publicKey, 'confirmed');
+    if (balance <= fee) continue;
+    await send(
+      stage.connection,
+      [
+        SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey: stage.admin.publicKey,
+          lamports: balance - fee,
+        }),
+      ],
+      [wallet],
+    );
+    returned += balance - fee;
+  }
+  log(`returned ${(returned / LAMPORTS_PER_SOL).toFixed(4)} SOL to the admin`);
 }
 
 /** Надіслати й дочекатись підтвердження. `confirmed` — те, що бачить гаманець. */
@@ -241,16 +297,31 @@ async function createAta(
  * конфігом успадковується і його розрахункова валюта: `register_source` приймає
  * лише її (`FR-036`).
  */
-async function ensureConfig(
+export async function ensureConfig(
   connection: Connection,
   admin: Keypair,
+  cluster: Cluster,
+  // On a public cluster the config is created once, deliberately, by
+  // `init-devnet.ts` — never as a side effect of a run with a stray key.
+  create: boolean = cluster === 'localnet',
 ): Promise<{ config: PublicKey; usdcMint: PublicKey; feeVault: PublicKey; fresh: boolean }> {
   const config = configPda(CLUB_PROGRAM).address;
   const existing = await connection.getAccountInfo(config, 'confirmed');
 
   if (existing !== null) {
     const decoded = decodeProtocolConfig(existing.data);
+    // The settlement mint's authority is the admin who created the config; with
+    // any other key the run would fail later, at the first mint, less clearly.
+    if (!decoded.admin.equals(admin.publicKey)) {
+      throw new Error(
+        `config admin is ${decoded.admin.toBase58()}, not ${admin.publicKey.toBase58()} — ` +
+          'pass that key in ADMIN_KEYPAIR, or on localnet restart the validator with --reset',
+      );
+    }
     return { config, usdcMint: decoded.usdcMint, feeVault: decoded.feeVault, fresh: false };
+  }
+  if (!create) {
+    throw new Error(`no protocol config on ${cluster} — run init:devnet first`);
   }
 
   const usdcMint = await createMint(connection, admin, admin.publicKey);
@@ -299,17 +370,21 @@ export async function prepareWorld(
   funding: readonly bigint[],
   log: (line: string) => void,
 ): Promise<WorldStage> {
+  const cluster = await detectCluster(connection);
+  if (cluster === 'mainnet-beta') throw new Error('the demo world is not for mainnet');
   const issuer = Keypair.generate();
   const trader = Keypair.generate();
   const wallets = funding.map(() => Keypair.generate());
 
-  await fund(connection, admin.publicKey, 50);
-  for (const wallet of [issuer, trader, ...wallets]) {
-    await fund(connection, wallet.publicKey, 10);
+  const sol = WALLET_SOL[cluster === 'localnet' ? 'localnet' : 'remote'];
+  if (cluster === 'localnet') await fund(connection, cluster, admin, admin.publicKey, 50);
+  await fund(connection, cluster, admin, issuer.publicKey, sol.issuer);
+  for (const wallet of [trader, ...wallets]) {
+    await fund(connection, cluster, admin, wallet.publicKey, sol.other);
   }
   log('гаманці профінансовані');
 
-  const { config, usdcMint, feeVault } = await ensureConfig(connection, admin);
+  const { config, usdcMint, feeVault } = await ensureConfig(connection, admin, cluster);
   log(`конфіг протоколу: ${config.toBase58()}`);
 
   const baseMint = await createMint(connection, admin, admin.publicKey);
@@ -369,6 +444,7 @@ export async function prepareWorld(
 
   return {
     connection,
+    cluster,
     admin,
     issuer,
     trader,

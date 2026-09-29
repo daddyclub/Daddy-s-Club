@@ -242,3 +242,39 @@ devnet — `T039a`.
 
 Той самий, що в `measure:sc002`: конфіг протоколу — singleton, карбувати USDC
 може лише адмін першого прогону, тож вузол піднімається з `--reset`.
+
+## Devnet
+
+The same scripts run against devnet; the cluster is read from the node's
+genesis hash, not from the URL. What changes there:
+
+- **SOL comes from the admin.** Devnet's faucet hands out a couple of SOL a
+  day, so the one-off wallets of a run are funded by transfer from
+  `ADMIN_KEYPAIR` and the remainder is returned at the end, also when the run
+  fails.
+- **The admin is fixed.** The protocol config — and with it the settlement
+  mint the scripts mint from — belongs to whoever created it. Off localnet the
+  scripts refuse to create it as a side effect and refuse any other key.
+- **Reports get a suffix**: `out/sc006.devnet.json`, `out/sc009.devnet.json`,
+  so a devnet run never overwrites the localnet one. The RPC URL is written
+  as its origin only.
+
+The public devnet endpoint answers a run of transactions with 429, so the
+scripts need a provider endpoint. Keep it in the repository's `.env` (ignored
+by git) as `RPC_URL=...` and pass the file to Node:
+
+```bash
+cd scripts
+# once, right after `solana program deploy` of daddys_club
+ADMIN_KEYPAIR=<deployer key> node --env-file=../.env src/init-devnet.ts
+# the standing issue the site links to; keys go to scripts/.secrets/
+ADMIN_KEYPAIR=<deployer key> node --env-file=../.env src/seed-devnet.ts
+# the measurements
+ADMIN_KEYPAIR=<deployer key> node --env-file=../.env src/demo.ts
+WEB_URL=<web built for devnet> ADMIN_KEYPAIR=<deployer key> \
+  node --env-file=../.env src/measure-sc009.ts
+```
+
+For `measure:sc009` the web has to be built for devnet
+(`VITE_CLUSTER=devnet VITE_RPC_URL=https://api.devnet.solana.com`) — the
+public endpoint is what visitors of the site get, so it is what is measured.

@@ -8,6 +8,8 @@ target/
 !.env.example
 
 *-keypair.json
+.secrets/
+scripts/out/*.devnet.json
 *.pem
 
 *.md

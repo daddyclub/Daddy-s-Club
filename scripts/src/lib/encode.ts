@@ -23,6 +23,8 @@ import {
 export const CLUB_PROGRAM = new PublicKey('7eT5T7mq1uD9piYJ2rMAzma8iYL7C7CZGPgxsB8DckoB');
 /** Program ID референсного емітента — `programs/demo-issuer/src/lib.rs`. */
 export const DEMO_PROGRAM = new PublicKey('8wKjGiLvnMTv7oi9PcztmbRv4v63emT2qPPrA8x1fW3z');
+/** Secondary market program ID — `programs/daddys-market/src/lib.rs`. */
+export const MARKET_PROGRAM = new PublicKey('G29gfknNBKtvpfPAjrigefg3tkX7cVXFgnd62NUtcniq');
 export const TOKEN_2022 = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 export const SYSTEM_PROGRAM = SystemProgram.programId;
 

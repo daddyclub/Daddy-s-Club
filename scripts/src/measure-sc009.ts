@@ -39,6 +39,7 @@ import { decodeProtocolConfig } from '../../packages/sdk/src/accounts.ts';
 import { pledgedShare } from '../../packages/sdk/src/math.ts';
 import { configPda } from '../../packages/sdk/src/pda.ts';
 import { associatedTokenAddress } from '../../packages/sdk/src/token.ts';
+import { type Cluster, detectCluster, readKeypair, redactUrl, reportName } from './lib/cluster.ts';
 import { CLUB_PROGRAM } from './lib/encode.ts';
 import { readTokenAmount } from './lib/read.ts';
 import {
@@ -48,7 +49,9 @@ import {
   joinIssue,
   openIssue,
   prepareWorld,
+  reclaim,
   USDC,
+  type WorldStage,
 } from './lib/world.ts';
 
 const RPC_URL = process.env.RPC_URL ?? 'http://127.0.0.1:8899';
@@ -80,6 +83,8 @@ const byTestId = (id: string): string => `[data-testid="${id}"]`;
 
 interface WalletSeed {
   readonly name: string;
+  /** Wallet Standard chain of the cluster the page is built for. */
+  readonly chain: string;
   readonly address: string;
   readonly publicKey: number[];
 }
@@ -94,7 +99,7 @@ function registerWallet(seed: WalletSeed): void {
   const account = {
     address: seed.address,
     publicKey: new Uint8Array(seed.publicKey),
-    chains: ['solana:localnet'],
+    chains: [seed.chain],
     features: ['solana:signTransaction'],
     label: seed.name,
   };
@@ -102,7 +107,7 @@ function registerWallet(seed: WalletSeed): void {
     version: '1.0.0',
     name: seed.name,
     icon: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=',
-    chains: ['solana:localnet'],
+    chains: [seed.chain],
     accounts: [account],
     features: {
       'standard:connect': { version: '1.0.0', connect: async () => ({ accounts: [account] }) },
@@ -133,6 +138,7 @@ async function walletContext(
   browser: Awaited<ReturnType<typeof chromium.launch>>,
   name: string,
   keypair: Keypair,
+  cluster: Cluster,
 ): Promise<BrowserContext> {
   const context = await browser.newContext();
   await context.exposeFunction('__daddysSign', (bytes: number[]) => {
@@ -145,6 +151,7 @@ async function walletContext(
   });
   await context.addInitScript(registerWallet, {
     name,
+    chain: cluster === 'mainnet-beta' ? 'solana:mainnet' : `solana:${cluster}`,
     address: keypair.publicKey.toBase58(),
     publicKey: [...keypair.publicKey.toBytes()],
   } satisfies WalletSeed);
@@ -188,10 +195,23 @@ interface Lock {
 
 async function main(): Promise<void> {
   const connection = new Connection(RPC_URL, 'confirmed');
-  const admin = Keypair.generate();
+  const cluster = await detectCluster(connection);
+  log(`cluster: ${cluster}, node: ${redactUrl(RPC_URL)}, web: ${WEB_URL}`);
+  // Off localnet the settlement mint belongs to the admin who created the
+  // config, so the run needs that key; on localnet a one-off key is enough.
+  const adminPath = process.env.ADMIN_KEYPAIR;
+  const admin = adminPath === undefined ? Keypair.generate() : readKeypair(adminPath);
 
   // ── Підготовка: поза секундоміром ──────────────────────────────────────────
   const stage = await prepareWorld(connection, admin, [FACE, BUYER_CASH], log);
+  try {
+    await measure(connection, cluster, stage);
+  } finally {
+    await reclaim(stage, log);
+  }
+}
+
+async function measure(connection: Connection, cluster: Cluster, stage: WorldStage): Promise<void> {
   const [seller, buyer] = stage.investors;
   if (seller === undefined || buyer === undefined) throw new Error('світ без двох гаманців');
   const issue = await openIssue(stage, log);
@@ -217,8 +237,12 @@ async function main(): Promise<void> {
 
   const browser = await chromium.launch({ executablePath: CHROME, headless: !HEADED });
   try {
-    const sellerPage = await (await walletContext(browser, 'Seller', seller.keypair)).newPage();
-    const buyerPage = await (await walletContext(browser, 'Buyer', buyer.keypair)).newPage();
+    const sellerPage = await (
+      await walletContext(browser, 'Seller', seller.keypair, cluster)
+    ).newPage();
+    const buyerPage = await (
+      await walletContext(browser, 'Buyer', buyer.keypair, cluster)
+    ).newPage();
     // Зелений гейт не дивиться на екран: помилка в консолі — теж результат.
     const consoleErrors: string[] = [];
     for (const [who, page] of [
@@ -432,7 +456,11 @@ async function main(): Promise<void> {
     for (const [name, value] of Object.entries(marks)) log(`  ${name.padEnd(20)} ${value} мс`);
     for (const lock of locks) log(`${lock.ok ? '✓' : '✗'} ${lock.id} ${lock.what}: ${lock.detail}`);
 
-    const out = resolve(dirname(fileURLToPath(import.meta.url)), '../out/sc009.json');
+    const out = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      '../out',
+      reportName('sc009', cluster),
+    );
     mkdirSync(dirname(out), { recursive: true });
     writeFileSync(
       out,
@@ -446,7 +474,8 @@ async function main(): Promise<void> {
           price: PRICE.toString(),
           feeBps,
           issue: issue.issue.toBase58(),
-          rpc: RPC_URL,
+          cluster,
+          rpc: redactUrl(RPC_URL),
           web: WEB_URL,
           locks,
           at: new Date().toISOString(),

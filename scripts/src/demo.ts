@@ -44,12 +44,12 @@ import { z } from 'zod';
 import { feedFromConnection } from '../../apps/web/src/lib/rpc.ts';
 import { decodeIssue } from '../../packages/sdk/src/accounts.ts';
 import { claimable, obligationTotal } from '../../packages/sdk/src/math.ts';
+import { type Cluster, detectCluster, redactUrl, reportName } from './lib/cluster.ts';
 import { readHolder, readIssue, readTokenAmount } from './lib/read.ts';
 import {
-  claimInstruction,
   COUPON_BPS,
+  claimInstruction,
   FACE,
-  formatUsdc as usdc,
   type HolderHandle,
   type IssueHandle,
   issueProceeds,
@@ -57,12 +57,18 @@ import {
   openIssue,
   PLEDGE_BPS,
   prepareWorld,
-  send,
+  reclaim,
   SWAP_AMOUNT_IN,
+  send,
   swapInstruction,
   USDC,
+  formatUsdc as usdc,
   type WorldStage,
 } from './lib/world.ts';
+
+/** The stage of this run, kept for the cleanup that returns devnet SOL. */
+let world: WorldStage | undefined;
+let cluster: Cluster = 'localnet';
 
 const RPC_URL = process.env.RPC_URL ?? 'http://127.0.0.1:8899';
 /** Адреса картки випуску — те, на що оператор дивиться під час кроків 5 і 7. */
@@ -370,7 +376,7 @@ async function collect(
 // ── Цикл ──────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  log(`вузол: ${RPC_URL}`);
+  log(`node: ${redactUrl(RPC_URL)}`);
   log(PAUSE ? 'режим: цикл веде оператор (DEMO_PAUSE=1)' : 'режим: без пауз — машинна підлога');
   log('');
 
@@ -379,14 +385,18 @@ async function main(): Promise<void> {
   // зробило б «інвестор побачив» відповіддю скрипта самому собі.
   const wire = new Connection(RPC_URL, 'confirmed');
   const investorWire = new Connection(RPC_URL, 'confirmed');
+  cluster = await detectCluster(wire);
+  log(`cluster: ${cluster}`);
 
   log('── підняття світу (у хронометраж не входить) ──');
   const stage = await prepareWorld(
     wire,
-    admin(process.env.DEMO_ADMIN_KEYPAIR),
+    // `ADMIN_KEYPAIR` is the name the other scripts use; on devnet it is the deployer.
+    admin(process.env.ADMIN_KEYPAIR ?? process.env.DEMO_ADMIN_KEYPAIR),
     [OFFER, OFFER],
     log,
   );
+  world = stage;
   const [walletA, walletB] = stage.investors;
   if (walletA === undefined || walletB === undefined) throw new Error('потрібні два гаманці');
   log('');
@@ -556,8 +566,8 @@ async function main(): Promise<void> {
 
   const report = {
     criterion: 'SC-006',
-    cluster: 'localnet',
-    rpcUrl: RPC_URL,
+    cluster,
+    rpcUrl: redactUrl(RPC_URL),
     operatorDriven: PAUSE,
     budgetMs: BUDGET_MS,
     wallMs: Number(wallMs.toFixed(1)),
@@ -577,7 +587,7 @@ async function main(): Promise<void> {
   };
 
   const here = dirname(fileURLToPath(import.meta.url));
-  const target = resolve(here, '../out/sc006.json');
+  const target = resolve(here, '../out', reportName('sc006', cluster));
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   log('');
@@ -588,10 +598,12 @@ async function main(): Promise<void> {
   if (broken.length > 0) process.exitCode = 1;
 }
 
-main().then(
-  () => process.exit(process.exitCode ?? 0),
-  (error: unknown) => {
-    log(`цикл зірвано: ${error instanceof Error ? error.stack : String(error)}`);
-    process.exit(1);
-  },
-);
+main()
+  .finally(() => (world === undefined ? undefined : reclaim(world, log)))
+  .then(
+    () => process.exit(process.exitCode ?? 0),
+    (error: unknown) => {
+      log(`цикл зірвано: ${error instanceof Error ? error.stack : String(error)}`);
+      process.exit(1);
+    },
+  );

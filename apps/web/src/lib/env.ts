@@ -29,7 +29,10 @@ export const DEFAULT_RPC_URL = 'http://127.0.0.1:8899';
  */
 const optionalText = z
   .unknown()
-  .transform((value) => (typeof value === 'string' && value !== '' ? value : undefined));
+  .transform((value) => (typeof value === 'string' && value !== '' ? value : undefined))
+  // Zod 4 fails an absent key whose transform yields `undefined` ("expected
+  // nonoptional"), and one absent key used to send every value to localnet.
+  .optional();
 
 const schema = z.object({
   VITE_RPC_URL: optionalText,
