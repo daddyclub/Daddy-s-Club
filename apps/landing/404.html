@@ -15,6 +15,14 @@
       const root = onPages && parts.length > 0 ? `/${parts.shift()}/` : '/';
       window.SITE_ROOT = root;
 
+      // Without an icon link the browser asks for /favicon.ico at the domain
+      // root, which is not this site's.
+      const icon = document.createElement('link');
+      icon.rel = 'icon';
+      icon.type = 'image/png';
+      icon.href = `${root}assets/favicon.png`;
+      document.head.append(icon);
+
       // The app used to live at the site root with path routes; it now lives
       // under app/ with hash routes. An old address is sent to its new form.
       if (parts[0] === 'app') parts.shift();
