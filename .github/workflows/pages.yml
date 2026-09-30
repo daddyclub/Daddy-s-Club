@@ -1,10 +1,11 @@
-# Builds apps/web and publishes it to GitHub Pages.
+# Builds the landing page and the web app and publishes both to GitHub Pages.
 #
-# The site lives under https://<owner>.github.io/<repo>/, so the bundle is
-# built with `--base=/<repo>/` and the router takes the same prefix from
-# `import.meta.env.BASE_URL`. Pages knows nothing about client-side routes:
-# `404.html` is a copy of `index.html`, so a deep link is served the app and
-# the router picks the route up from the URL.
+# One site, two folders: the landing (apps/landing, static, no build) at
+# https://<owner>.github.io/<repo>/ and the web app at .../<repo>/app/. The app
+# is built with `--base=/<repo>/app/` and routes by hash (`app/#/issue/…`), so
+# every app address is its own index.html, served with 200. The root 404.html
+# is the landing's: it sends addresses from before the move (`/<repo>/issue/…`)
+# to their hash form and offers a way home for anything else.
 #
 # Repository variables (Settings → Secrets and variables → Actions → Variables)
 # configure the cluster the live screen reads from. They are public by nature:
@@ -46,19 +47,22 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm --filter @daddys-club/web build --base=/${{ github.event.repository.name }}/
+      - run: pnpm --filter @daddys-club/web build --base=/${{ github.event.repository.name }}/app/
         env:
           VITE_RPC_URL: ${{ vars.VITE_RPC_URL }}
           VITE_CLUSTER: ${{ vars.VITE_CLUSTER }}
           VITE_PROGRAM_ID: ${{ vars.VITE_PROGRAM_ID }}
 
-      - run: cp apps/web/dist/index.html apps/web/dist/404.html
+      - run: |
+          mkdir -p _site
+          cp -r apps/landing/. _site/
+          cp -r apps/web/dist _site/app
 
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: apps/web/dist
+          path: _site
 
   deploy:
     needs: build

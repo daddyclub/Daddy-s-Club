@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Not found — Daddy's Club</title>
+  <script>
+    // GitHub Pages serves this page for every unknown path, at that path, so
+    // nothing here may be relative. The site root is the repository segment on
+    // *.github.io and "/" on a custom domain.
+    (() => {
+      const parts = location.pathname.split('/').filter(Boolean);
+      const onPages = location.hostname.endsWith('.github.io');
+      const root = onPages && parts.length > 0 ? `/${parts.shift()}/` : '/';
+      window.SITE_ROOT = root;
+
+      // The app used to live at the site root with path routes; it now lives
+      // under app/ with hash routes. An old address is sent to its new form.
+      if (parts[0] === 'app') parts.shift();
+      if (['issue', 'issuer', 'live'].includes(parts[0])) {
+        location.replace(`${root}app/#/${parts.join('/')}${location.search}`);
+      }
+    })();
+  </script>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      background: #ff5525;
+      color: #16120f;
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 18px;
+      line-height: 1.55;
+    }
+    main {
+      width: 100%;
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 48px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    h1 {
+      margin: 0;
+      font-family: "Arial Black", "Helvetica Neue", "Segoe UI Black", system-ui, sans-serif;
+      font-weight: 900;
+      letter-spacing: -0.02em;
+      font-size: clamp(44px, 8vw, 92px);
+      line-height: 1;
+    }
+    p { margin: 0; }
+    .mono { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 14px; }
+    nav { display: flex; gap: 16px; flex-wrap: wrap; }
+    a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 56px;
+      padding: 0 28px;
+      border: 2px solid #16120f;
+      color: #16120f;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 16px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    a.primary { background: #16120f; color: #f6f1e8; }
+    a:focus-visible { outline: 3px solid #16120f; outline-offset: 3px; }
+  </style>
+</head>
+<body>
+<main>
+  <p class="mono">404 · DADDY'S CLUB</p>
+  <h1>Nothing lives at this address.</h1>
+  <nav>
+    <a class="primary" id="home" href="/">Home</a>
+    <a id="app" href="/app/">Open the app</a>
+  </nav>
+</main>
+<script>
+  document.getElementById('home').href = window.SITE_ROOT;
+  document.getElementById('app').href = `${window.SITE_ROOT}app/`;
+</script>
+</body>
+</html>

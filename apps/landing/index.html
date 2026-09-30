@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daddy's Club — bonds that repay themselves from a protocol's fees</title>
+  <meta name="description" content="A protocol sells a short-term bond against its own future fee revenue. An agreed share of every fee is split off in the same transaction and paid to bondholders until face plus coupon is covered. On Solana devnet.">
+  <meta name="theme-color" content="#FF5525">
+  <link rel="canonical" href="https://daddyclub.github.io/Daddy-s-Club/">
+  <link rel="icon" href="assets/favicon.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Daddy's Club">
+  <meta property="og:title" content="Daddy's Club — bonds that repay themselves from a protocol's fees">
+  <meta property="og:description" content="An agreed share of every fee is split off in the same transaction and paid to bondholders until face plus coupon is covered. On Solana devnet.">
+  <meta property="og:url" content="https://daddyclub.github.io/Daddy-s-Club/">
+  <meta property="og:image" content="https://daddyclub.github.io/Daddy-s-Club/assets/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Daddy's Club: bonds that repay themselves from a protocol's fees">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Daddy's Club — bonds that repay themselves from a protocol's fees">
+  <meta name="twitter:description" content="An agreed share of every fee is split off in the same transaction and paid to bondholders until face plus coupon is covered. On Solana devnet.">
+  <meta name="twitter:image" content="https://daddyclub.github.io/Daddy-s-Club/assets/og.png">
+
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="band orange hero">
+  <div class="inner">
+    <div class="masthead">
+      <div class="display">Daddy's Club</div>
+      <nav class="masthead-nav mono" aria-label="Sections">
+        <a href="#measured">Measured</a>
+        <a href="#limits">What it does not do</a>
+        <a href="https://github.com/daddyclub/Daddy-s-Club">Source</a>
+      </nav>
+    </div>
+
+    <div class="hero-main">
+      <div class="hero-copy">
+        <p class="eyebrow mono">ON DEVNET · TEST USDC</p>
+        <h1>Bonds that repay themselves from a protocol's fees.</h1>
+        <p class="lead">A protocol sells a short-term bond against its own future fee revenue. An agreed share of every fee is split off in the same transaction and paid to bondholders until face plus coupon is covered — then the split stops on its own.</p>
+      </div>
+      <img class="hero-mark" src="assets/mark.png" width="520" height="520" alt="Daddy's Club mark: a gentleman with round glasses and a pipe">
+    </div>
+
+    <div class="hero-foot">
+      <div class="figure">
+        <p class="figure-label mono">REPAID SO FAR ON THE STANDING ISSUE</p>
+        <div class="figure-row">
+          <span class="sr-only" id="repaid-text">180.00 USDC repaid of 273,750.00 USDC</span>
+          <div class="flap mono" id="repaid-flap" aria-hidden="true"><span style="--i:0">1</span><span style="--i:1">8</span><span style="--i:2">0</span><span style="--i:3">.</span><span style="--i:4">0</span><span style="--i:5">0</span></div>
+          <div class="figure-of mono" aria-hidden="true">of <span id="owed">273,750.00</span> USDC</div>
+        </div>
+        <p class="figure-caption mono">Standing devnet issue <a href="https://explorer.solana.com/address/DQ3VtusT8kxeByCmWHyejcaSsDpbLfHFFqNjoErGXUMD?cluster=devnet">DQ3V…XUMD</a> · <span id="read-at">as of 30 Sep 2026</span></p>
+      </div>
+      <div class="actions">
+        <a class="button primary" href="app/#/live/issue/DQ3VtusT8kxeByCmWHyejcaSsDpbLfHFFqNjoErGXUMD">Watch the live issue →</a>
+        <a class="button secondary" href="https://github.com/daddyclub/Daddy-s-Club">Source on GitHub</a>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="band" aria-labelledby="problem">
+    <div class="inner">
+      <h2 id="problem">Capital today, against revenue you already earn.</h2>
+      <div class="columns-3">
+        <div class="option">
+          <h3 class="display">Sell the token</h3>
+          <p>Dilutes holders, and the price follows the market's mood, not the revenue.</p>
+        </div>
+        <div class="option">
+          <h3 class="display">Borrow against collateral</h3>
+          <p>Needs locked assets the protocol does not have to spare.</p>
+        </div>
+        <div class="option">
+          <h3 class="display">Revenue-share token</h3>
+          <p>A perpetual rent on the revenue. No capital arrives up front.</p>
+        </div>
+      </div>
+      <p class="closing">None of them trades a defined share of future revenue for a defined sum today, with a date when the obligation ends.</p>
+    </div>
+  </section>
+
+  <section class="band ink" aria-labelledby="how">
+    <div class="inner">
+      <h2 id="how">The fee is split where it arises.</h2>
+      <ol class="steps">
+        <li><span class="mono">01</span>A swap on the issuer's protocol pays a fee.</li>
+        <li><span class="mono">02</span>The issuer's fee instruction calls the split by CPI.</li>
+        <li><span class="mono">03</span>The agreed share goes to the bond's escrow — in the same transaction. On the standing issue it is 12 %.</li>
+        <li><span class="mono">04</span>Holders claim their share whenever they like.</li>
+      </ol>
+      <div class="columns-2">
+        <p>No extra transactions, no external executors, no money passing through the issuer's hands.</p>
+        <p>Repayment ends by itself once face plus coupon is covered. The issuer can also buy the flow back early in one payment.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="band orange" aria-labelledby="exit">
+    <div class="inner">
+      <div class="exit">
+        <div class="exit-copy">
+          <h2 id="exit">Sell before maturity. Keep what you earned.</h2>
+          <p class="lead">A holder lists part of a position at a fixed price. Another wallet buys it for USDC in one instruction. What accrued before the sale stays with the seller; the buyer earns from the purchase on.</p>
+          <p class="lead">The transfer hook settles both sides before every transfer — including one sent from any wallet app, past this interface.</p>
+        </div>
+        <div class="exit-figure">
+          <p class="display">3.0 s</p>
+          <p class="mono">from listing to USDC in the seller's wallet, on devnet</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band measured" id="measured" aria-labelledby="measured-title">
+    <div class="inner">
+      <h2 id="measured-title">What we measured.</h2>
+      <table>
+        <colgroup><col class="claim"><col class="figure-col"><col></colgroup>
+        <thead>
+          <tr><th scope="col">CLAIM</th><th scope="col" class="num">FIGURE</th><th scope="col">HOW</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>The split happens in the same transaction as the fee</td><td class="num">0 extra tx · 0 executors</td><td class="how">a property of the path, held by tests on the CPI route</td></tr>
+          <tr><td>The money adds up to the smallest USDC unit</td><td class="num">0 of 1,000</td><td class="how">random sequences of fees, claims, transfers and sales</td></tr>
+          <tr><td>No holder takes more than their bonds earned</td><td class="num">0 of 1,000</td><td class="how">the same sequences</td></tr>
+          <tr><td>A fee costs the same however many holders there are</td><td class="num">10,852 CU · 0.00 %</td><td class="how">1 holder against 100 holders</td></tr>
+          <tr><td>Listing to USDC in the seller's wallet</td><td class="num">3.0 s</td><td class="how">on devnet; 1.3 s on a local validator</td></tr>
+          <tr><td>The whole cycle, issuance to payout</td><td class="num">16.4 s</td><td class="how">machine time on devnet</td></tr>
+          <tr><td>A wrong wallet claims, changes terms or drains escrow</td><td class="num">0 of 8</td><td class="how">negative scenarios</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="band limits" id="limits" aria-labelledby="limits-title">
+    <div class="inner">
+      <h2 id="limits-title">What it does not do.</h2>
+      <ul class="limits-list">
+        <li><b>No catalogue of issues, no risk metrics yet.</b> Buying a bond is possible; judging whose it is, is not.</li>
+        <li><b>No admission threshold.</b> In this version anyone can create an issue.</li>
+        <li><b>One issuer, and it is our own demo issuer.</b> No live third-party protocol is integrated.</li>
+        <li><b>Devnet only.</b> Settlement there is a test USDC of our own: you can watch the standing issue and its offers, but not get this USDC to trade.</li>
+        <li><b>No collateral of any kind.</b> The only backing is the fee stream.</li>
+        <li><b>No KYC, no legal qualification, no transfer restrictions.</b> The instrument looks like debt; its legal assessment is not part of this work.</li>
+        <li><b>No proof that revenue is not diverted.</b> We see only what passes through the split.</li>
+        <li><b>The issuer changes its own code.</b> The split is called from the issuer's fee instruction; there is no zero-integration mode.</li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<footer class="ink">
+  <div class="inner">
+    <div class="brand">
+      <img src="assets/mark.png" width="64" height="64" alt="">
+      <span class="display">Daddy's Club</span>
+    </div>
+    <nav class="footer-nav mono" aria-label="Footer">
+      <a href="app/">App</a>
+      <a href="https://github.com/daddyclub/Daddy-s-Club">Source</a>
+      <span>MIT licence</span>
+      <span class="disclaimer">Devnet only. Not an offer of securities.</span>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  // Reads the standing devnet issue once and flips the repaid figure in. The
+  // figures already in the markup are the fallback: on any failure they stay,
+  // with their date. The layout below is a copy of the Issue account; a test in
+  // packages/sdk holds it against the decoder.
+  (() => {
+    const ISSUE_LAYOUT = {"program":"7eT5T7mq1uD9piYJ2rMAzma8iYL7C7CZGPgxsB8DckoB","length":222,"discriminator":[171,193,204,62,63,166,106,255],"obligationAt":180,"repaidAt":188};
+    const ISSUE = 'DQ3VtusT8kxeByCmWHyejcaSsDpbLfHFFqNjoErGXUMD';
+    const RPC = 'https://api.devnet.solana.com';
+
+    // USDC has 6 decimals; the page shows 2 and rounds down, as the programs do.
+    const usdc = (amount) => {
+      const cents = amount / 10000n;
+      const whole = (cents / 100n).toLocaleString('en-US');
+      return `${whole}.${String(cents % 100n).padStart(2, '0')}`;
+    };
+
+    const read = async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch(RPC, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'getAccountInfo',
+            params: [ISSUE, { encoding: 'base64', commitment: 'confirmed' }],
+          }),
+          signal: controller.signal,
+        });
+        if (!response.ok) return null;
+        const body = await response.json();
+        const value = body?.result?.value;
+        if (!value || value.owner !== ISSUE_LAYOUT.program) return null;
+        const bytes = Uint8Array.from(atob(value.data[0]), (c) => c.charCodeAt(0));
+        if (bytes.length !== ISSUE_LAYOUT.length) return null;
+        if (ISSUE_LAYOUT.discriminator.some((b, i) => bytes[i] !== b)) return null;
+        const view = new DataView(bytes.buffer);
+        return {
+          owed: view.getBigUint64(ISSUE_LAYOUT.obligationAt, true),
+          repaid: view.getBigUint64(ISSUE_LAYOUT.repaidAt, true),
+        };
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    read().then((issue) => {
+      if (!issue) return;
+      const repaid = usdc(issue.repaid);
+      const owed = usdc(issue.owed);
+      const flap = document.getElementById('repaid-flap');
+      flap.replaceChildren(
+        ...Array.from(repaid, (ch, i) => {
+          const cell = document.createElement('span');
+          cell.textContent = ch;
+          cell.style.setProperty('--i', String(i));
+          return cell;
+        }),
+      );
+      flap.classList.add('flipping');
+      document.getElementById('owed').textContent = owed;
+      document.getElementById('repaid-text').textContent = `${repaid} USDC repaid of ${owed} USDC`;
+      const now = new Date();
+      const hh = String(now.getUTCHours()).padStart(2, '0');
+      const mm = String(now.getUTCMinutes()).padStart(2, '0');
+      document.getElementById('read-at').textContent = `read from devnet at ${hh}:${mm} UTC`;
+    });
+  })();
+</script>
+</body>
+</html>
