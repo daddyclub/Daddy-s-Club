@@ -188,6 +188,8 @@ fn as_created() -> AsCreated {
             AccountMeta::new(extra_metas_pda(BOND_MINT).0, false),
             AccountMeta::new_readonly(token_program().0, false),
             AccountMeta::new_readonly(system_program().0, false),
+            // No previous issue: the source is free.
+            AccountMeta::new_readonly(club_id(), false),
         ],
     );
 
@@ -195,7 +197,14 @@ fn as_created() -> AsCreated {
         &create,
         &[
             (config_pda().0, anchor_account(&stored_config())),
-            (demo_source(), anchor_account(&source_of(ISSUER, None))),
+            (
+                demo_source(),
+                // `FR-007`: no issue without money through the hook.
+                anchor_account(&RevenueSource {
+                    total_observed: 1,
+                    ..source_of(ISSUER, None)
+                }),
+            ),
             (demo_issue(), uninitialized()),
             (ISSUER, wallet()),
             (USDC_MINT, usdc_mint(0)),
@@ -205,6 +214,7 @@ fn as_created() -> AsCreated {
             (extra_metas_pda(BOND_MINT).0, uninitialized()),
             token_program(),
             system_program(),
+            omitted(club_id()),
         ],
         &[Check::success()],
     );

@@ -102,6 +102,28 @@ pub struct Issue {
     pub bump: u8,
 }
 
+impl Issue {
+    /// Whether the issue has let go of its source (`FR-006`): "at most one
+    /// **active** issue" means a finished one holds no place.
+    ///
+    /// Repaid and undersubscribed do — but undersubscribed is not only what
+    /// has been written down. `Failed` is written by the first `refund`, and an
+    /// issue nobody subscribed to never gets one: there is no one to refund. So
+    /// a closed window with an incomplete raise counts the same as a recorded
+    /// `Failed` — by the very rule `refund` opens on.
+    ///
+    /// `Funded` holds investors' money until the payout and `PastDue` can only
+    /// be repaid (`FR-022`) — neither lets go. The `match` is exhaustive on
+    /// purpose: a new state must not quietly become "free".
+    pub fn releases_source(&self, now: i64) -> bool {
+        match self.state {
+            IssueState::Repaid | IssueState::Failed => true,
+            IssueState::Subscribing => now >= self.subscription_end_ts && self.raised < self.face,
+            IssueState::Funded | IssueState::Repaying | IssueState::PastDue => false,
+        }
+    }
+}
+
 /// Облік власника за випуском. Seeds `["holder", issue, owner]`.
 ///
 /// Існування цього акаунта — і є «відкритий облік» із `FR-038`: передача

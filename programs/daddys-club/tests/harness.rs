@@ -73,6 +73,11 @@ use {
 pub const NOW: i64 = 1_800_000_000;
 pub const DAY: i64 = 86_400;
 
+/// Revenue the source passed through the hook before its issue. Without it no
+/// issue is created at all (`FR-007`), so every world where an issue is born
+/// from the real instruction starts with this amount.
+pub const OBSERVED_BEFORE: u64 = 1_000_000_000;
+
 /// USDC має шість знаків; уся арифметика тестів рахується в цих одиницях.
 pub const USDC_DECIMALS: u8 = 6;
 /// Бонд неподільний: частка у випуску міряється лотами, а не дробами лота.

@@ -26,9 +26,22 @@
 //! (`FR-037`). Двома PDA-сховищами на одній валюті це й не вийшло б зробити
 //! через ATA — адреса в них одна на пару «власник + мінт».
 //!
-//! Чого тут навмисно немає — порогу історії доходу (`FR-007`). Він приїде
-//! окремою задачею (T040) разом зі своїм негативним тестом; до того випуск може
-//! створити будь-хто, і віха M1 каже про це прямим текстом.
+//! Two admission rules stand before all of that, and both read the source:
+//!
+//! - **revenue history** (`FR-007`) — at least the protocol threshold has
+//!   passed since registration, **and** money has actually gone through the
+//!   intercept. Time alone is not enough: a registered and forgotten source
+//!   would sit out the threshold without showing a cent, and "verified
+//!   history" in the spec means money. How much is enough is not admission's
+//!   call: that is coverage (`FR-029`), and the investor answers it, not the
+//!   program;
+//! - **one active** (`FR-006`) — the source is either free, or its issue has
+//!   run its course (`Issue::releases_source`). The previous issue is then
+//!   passed alongside and the new one takes its place: otherwise a repaid bond
+//!   would hold the stream forever, and a second issue would need a new source
+//!   — and earn the threshold all over again. An undersubscribed predecessor
+//!   not yet marked gets `Failed` right here: the recorded state must not lag
+//!   behind what it has already been judged to be.
 //!
 //! **Видача — друга половина файлу.** Це та мить, коли зібране перестає
 //! належати інвесторам і зобов'язання виникає (`FR-012`), тому в ній сходяться
@@ -298,19 +311,58 @@ pub struct CreateIssue<'info> {
     pub token_program: Program<'info, Token2022>,
 
     pub system_program: Program<'info, System>,
+
+    /// The issue the source backs right now — only when it is being replaced.
+    /// A free source passes the core's program id instead.
+    ///
+    /// Pinned to the source from both ends, as in `intercept`: `has_one` leads
+    /// from the issue to the source, `active_issue` back. A finished issue
+    /// cannot stand in for the live one — the ring will not close. It comes
+    /// last so that the accounts before it do not shift.
+    #[account(
+        mut,
+        has_one = source,
+        constraint = source.active_issue == Some(previous_issue.key()) @ ClubError::SourceNotPledged,
+    )]
+    pub previous_issue: Option<Box<Account<'info, Issue>>>,
 }
 
 pub fn create_issue(ctx: Context<CreateIssue>, seq: u64, params: IssueParams) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     params.validate(&ctx.accounts.config, now)?;
 
-    // `FR-006`: два випуски на один потік конкурували б за ті самі гроші без
-    // визначеної черговості. Перевірка тут, а не в `intercept`: розщеплювати
-    // навпіл уже зібрані кошти нічим.
+    // `FR-007`: the threshold is read from the config at creation time, not
+    // remembered by the source, so there is nothing to shorten it with for a
+    // single issue. The clock is the chain's, like `first_seen_ts`.
+    let source = &ctx.accounts.source;
+    let history = now
+        .checked_sub(source.first_seen_ts)
+        .ok_or(ClubError::MathOverflow)?;
     require!(
-        ctx.accounts.source.active_issue.is_none(),
-        ClubError::SourceAlreadyPledged
+        history >= ctx.accounts.config.history_threshold_secs,
+        ClubError::InsufficientRevenueHistory
     );
+    require!(source.total_observed > 0, ClubError::NoRevenueObserved);
+
+    // `FR-006`: two issues on one stream would compete for the same money
+    // with no defined order. The check is here, not in `intercept`: there is
+    // nothing to split already collected funds with. One refusal covers both
+    // a missing predecessor and a live one: either way the source is taken.
+    match ctx.accounts.previous_issue.as_deref_mut() {
+        None => require!(
+            source.active_issue.is_none(),
+            ClubError::SourceAlreadyPledged
+        ),
+        Some(previous) => {
+            require!(
+                previous.releases_source(now),
+                ClubError::SourceAlreadyPledged
+            );
+            if previous.state == IssueState::Subscribing {
+                previous.state = IssueState::Failed;
+            }
+        }
+    }
 
     let obligation_total = params.obligation_total()?;
     let issue_key = ctx.accounts.issue.key();

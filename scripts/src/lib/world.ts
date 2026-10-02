@@ -25,12 +25,13 @@ import {
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
+  SYSVAR_CLOCK_PUBKEY,
   SystemProgram,
   sendAndConfirmTransaction,
   Transaction,
   type TransactionInstruction,
 } from '@solana/web3.js';
-import { decodeProtocolConfig } from '../../../packages/sdk/src/accounts.ts';
+import { decodeProtocolConfig, decodeRevenueSource } from '../../../packages/sdk/src/accounts.ts';
 import {
   configPda,
   extraAccountMetasPda,
@@ -74,6 +75,21 @@ const SUBSCRIPTION_SECS = 7n * 86_400n;
 
 /** Скільки USDC заходить в один своп. Комісія з нього — 0.3% (`demo_issuer`). */
 export const SWAP_AMOUNT_IN = 100_000n * USDC;
+
+/**
+ * `history_threshold_secs` of a config this module creates (localnet). Short on
+ * purpose: SPEC → Assumptions sets the demo threshold low and has the demo
+ * issuer build the history beforehand, otherwise the three-minute cycle of
+ * `SC-006` is out of reach by definition. Devnet carries the same value, set by
+ * `update-config.ts`.
+ */
+export const DEMO_HISTORY_THRESHOLD_SECS = 120n;
+
+/** Swaps run through a fresh source before its first issue (`FR-007`, `FR-028`). */
+const HISTORY_SWAPS = 2;
+
+/** How often the chain clock is read while the history threshold runs out. */
+const CLOCK_POLL_MS = 5_000;
 
 /**
  * Сума в USDC із розділювачем тисяч і двома знаками — **тільки для показу**.
@@ -333,7 +349,7 @@ export async function ensureConfig(
     .u16(5_000) // max_pledge_bps — `FR-005`
     .i64(30n * 86_400n)
     .i64(180n * 86_400n)
-    .i64(86_400n) // history_threshold_secs — `FR-007`
+    .i64(DEMO_HISTORY_THRESHOLD_SECS) // history_threshold_secs — `FR-007`
     .build();
 
   await send(
@@ -442,7 +458,7 @@ export async function prepareWorld(
   );
   log(`джерело: ${source.toBase58()}`);
 
-  return {
+  const stage: WorldStage = {
     connection,
     cluster,
     admin,
@@ -461,6 +477,53 @@ export async function prepareWorld(
     traderUsdc,
     traderBase,
   };
+  await buildHistory(stage, log);
+
+  return stage;
+}
+
+/** `Clock.unix_timestamp`: the sysvar is slot, epoch start, epoch, leader epoch, then it. */
+const CLOCK_UNIX_TIMESTAMP_OFFSET = 32;
+
+/** The chain's clock — the one `create_issue` measures the history with, not this machine's. */
+async function chainTime(connection: Connection): Promise<bigint> {
+  const clock = await connection.getAccountInfo(SYSVAR_CLOCK_PUBKEY, 'confirmed');
+  if (clock === null) throw new Error('clock sysvar is missing');
+  return clock.data.readBigInt64LE(CLOCK_UNIX_TIMESTAMP_OFFSET);
+}
+
+/**
+ * Admission (`FR-007`): before its first issue a source needs revenue that
+ * actually went through the intercept, and the protocol's threshold of time
+ * since it was registered. A demo source is born a second ago, so this is the
+ * part SPEC → Assumptions calls "the history is filled in beforehand": a few
+ * swaps with no issue behind them — the intercept only observes then — and a
+ * wait on the chain clock until the threshold has passed. Both stay outside
+ * the `SC-006` timing, like the rest of the preparation.
+ */
+async function buildHistory(stage: WorldStage, log: (line: string) => void): Promise<void> {
+  for (let swap = 0; swap < HISTORY_SWAPS; swap += 1) {
+    await send(stage.connection, [swapInstruction(stage, null)], [stage.trader]);
+  }
+
+  const [configInfo, sourceInfo] = await Promise.all([
+    stage.connection.getAccountInfo(stage.config, 'confirmed'),
+    stage.connection.getAccountInfo(stage.source, 'confirmed'),
+  ]);
+  if (configInfo === null || sourceInfo === null) throw new Error('config or source is missing');
+  const threshold = decodeProtocolConfig(configInfo.data).historyThresholdSecs;
+  const source = decodeRevenueSource(sourceInfo.data);
+  if (source.totalObserved === 0n) throw new Error('history swaps left no revenue on the source');
+  log(`history: ${formatUsdc(source.totalObserved)} USDC observed by the source`);
+
+  const admittedAt = source.firstSeenTs + threshold;
+  log(`history: waiting for the chain clock to pass the ${threshold} s threshold`);
+  for (;;) {
+    const now = await chainTime(stage.connection);
+    if (now >= admittedAt) break;
+    await new Promise((resolve) => setTimeout(resolve, CLOCK_POLL_MS));
+  }
+  log('history: the source is admitted');
 }
 
 /**
@@ -509,6 +572,7 @@ export async function openIssue(
           rw(extraMetas),
           ro(TOKEN_2022),
           ro(SYSTEM_PROGRAM),
+          ro(CLUB_PROGRAM), // previous issue: none, the source is fresh (`FR-006`)
         ],
         data,
       ),
@@ -624,8 +688,16 @@ export async function issueProceeds(
   log('видача пройшла — випуск у погашенні');
 }
 
-/** Своп демо-емітента: утримує комісію й розщеплює її в тій самій транзакції. */
-export function swapInstruction(stage: WorldStage, issue: IssueHandle): TransactionInstruction {
+/**
+ * Своп демо-емітента: утримує комісію й розщеплює її в тій самій транзакції.
+ *
+ * With no issue (`null`) the three issue slots carry the demo program's own id —
+ * Anchor's empty optional account — and the intercept only adds to the history.
+ */
+export function swapInstruction(
+  stage: WorldStage,
+  issue: IssueHandle | null,
+): TransactionInstruction {
   return instruction(
     DEMO_PROGRAM,
     [
@@ -637,9 +709,9 @@ export function swapInstruction(stage: WorldStage, issue: IssueHandle): Transact
       rw(stage.poolBase),
       rw(stage.sourceVault),
       rw(stage.source),
-      rw(issue.issue),
-      rw(issue.escrowVault),
-      ro(issue.bondMint),
+      issue === null ? ro(DEMO_PROGRAM) : rw(issue.issue),
+      issue === null ? ro(DEMO_PROGRAM) : rw(issue.escrowVault),
+      issue === null ? ro(DEMO_PROGRAM) : ro(issue.bondMint),
       ro(stage.usdcMint),
       ro(stage.baseMint),
       ro(TOKEN_2022),

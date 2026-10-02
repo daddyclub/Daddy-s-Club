@@ -107,6 +107,8 @@ fn create_ix(issuer: Pubkey, seq: u64, params: IssueParams) -> Instruction {
             AccountMeta::new(extra_metas_pda(BOND_MINT).0, false),
             AccountMeta::new_readonly(token_program().0, false),
             AccountMeta::new_readonly(system_program().0, false),
+            // No previous issue: the source is free. A replacement puts it here.
+            AccountMeta::new_readonly(club_id(), false),
         ],
     )
 }
@@ -127,6 +129,7 @@ fn create_accounts(issuer: Pubkey, seq: u64) -> Vec<(Pubkey, Account)> {
         (extra_metas_pda(BOND_MINT).0, uninitialized()),
         token_program(),
         system_program(),
+        omitted(club_id()),
     ]
 }
 
@@ -227,6 +230,344 @@ fn a_source_that_already_backs_an_issue_refuses_a_second_one() {
         &create_ix(ISSUER, 1, terms()),
         &taken,
         &[custom(ClubError::SourceAlreadyPledged)],
+    );
+}
+
+// ---- Admission: revenue history (`FR-007`) ---------------------------------
+
+/// The working creation set with the source swapped for the given one.
+fn create_on(source: RevenueSource) -> Vec<(Pubkey, Account)> {
+    replacing(
+        &create_accounts(ISSUER, ISSUE_SEQ),
+        source_key(ISSUER),
+        anchor_account(&source),
+    )
+}
+
+/// The threshold comes from the config and is counted on the chain clock;
+/// both edges sit one second apart. The control that the clock is the one the
+/// test assumes: the working case below stands exactly on the edge and passes.
+#[test]
+fn a_source_with_exactly_the_threshold_of_history_is_admitted() {
+    let threshold = stored_config().history_threshold_secs;
+    assert_eq!(setup().sysvars.clock.unix_timestamp, NOW);
+
+    setup().process_and_validate_instruction(
+        &create_ix(ISSUER, ISSUE_SEQ, terms()),
+        &create_on(RevenueSource {
+            first_seen_ts: NOW - threshold,
+            ..stored_source(ISSUER, None)
+        }),
+        &[Check::success()],
+    );
+}
+
+#[test]
+fn a_source_one_second_short_of_the_threshold_is_refused() {
+    let threshold = stored_config().history_threshold_secs;
+
+    setup().process_and_validate_instruction(
+        &create_ix(ISSUER, ISSUE_SEQ, terms()),
+        &create_on(RevenueSource {
+            first_seen_ts: NOW - threshold + 1,
+            ..stored_source(ISSUER, None)
+        }),
+        &[custom(ClubError::InsufficientRevenueHistory)],
+    );
+}
+
+/// A source registered this very second — the shortest history there is.
+#[test]
+fn a_source_registered_this_second_is_refused() {
+    setup().process_and_validate_instruction(
+        &create_ix(ISSUER, ISSUE_SEQ, terms()),
+        &create_on(RevenueSource {
+            first_seen_ts: NOW,
+            ..stored_source(ISSUER, None)
+        }),
+        &[custom(ClubError::InsufficientRevenueHistory)],
+    );
+}
+
+/// "Verified history" is money, not a calendar: a source that sat out the
+/// threshold ten times over without passing a cent is not admitted.
+#[test]
+fn a_source_that_waited_out_the_threshold_with_no_revenue_is_refused() {
+    let threshold = stored_config().history_threshold_secs;
+
+    setup().process_and_validate_instruction(
+        &create_ix(ISSUER, ISSUE_SEQ, terms()),
+        &create_on(RevenueSource {
+            first_seen_ts: NOW - 10 * threshold,
+            total_observed: 0,
+            ..stored_source(ISSUER, None)
+        }),
+        &[custom(ClubError::NoRevenueObserved)],
+    );
+}
+
+/// One unit is already a fact of flow. How much money is enough is coverage's
+/// call (`FR-029`), not admission's; the test holds that line so that a volume
+/// threshold does not appear quietly.
+#[test]
+fn a_single_unit_of_revenue_is_enough_to_be_admitted() {
+    setup().process_and_validate_instruction(
+        &create_ix(ISSUER, ISSUE_SEQ, terms()),
+        &create_on(RevenueSource {
+            total_observed: 1,
+            ..stored_source(ISSUER, None)
+        }),
+        &[Check::success()],
+    );
+}
+
+// ---- Replacing a finished issue (`FR-006`, T040a) --------------------------
+
+/// The new issue on the same source — the one after the previous.
+const NEXT_SEQ: u64 = ISSUE_SEQ + 1;
+
+/// The source's previous issue: `demo_issue()`, also `issue_key(ISSUER,
+/// ISSUE_SEQ)`.
+fn previous_key() -> Pubkey {
+    issue_key(ISSUER, ISSUE_SEQ)
+}
+
+/// Creation with a predecessor passed: the last slot carries its key.
+fn replace_ix(previous: Pubkey) -> Instruction {
+    let mut instruction = create_ix(ISSUER, NEXT_SEQ, terms());
+    *instruction
+        .accounts
+        .last_mut()
+        .expect("the predecessor slot is in the set") = AccountMeta::new(previous, false);
+
+    instruction
+}
+
+/// The replacement set: the source backs `active`, the predecessor slot holds
+/// `previous`.
+fn replace_accounts(active: Option<Pubkey>, previous: (Pubkey, Account)) -> Vec<(Pubkey, Account)> {
+    let mut accounts = replacing(
+        &create_accounts(ISSUER, NEXT_SEQ),
+        source_key(ISSUER),
+        anchor_account(&stored_source(ISSUER, active)),
+    );
+    accounts.pop();
+    accounts.push(previous);
+
+    accounts
+}
+
+/// Replaces a predecessor in the given state and checks that the source moved
+/// over to the new issue.
+fn replace(previous: Issue) -> mollusk_svm::result::InstructionResult {
+    let result = setup().process_and_validate_instruction(
+        &replace_ix(previous_key()),
+        &replace_accounts(
+            Some(previous_key()),
+            (previous_key(), anchor_account(&previous)),
+        ),
+        &[Check::success()],
+    );
+
+    let source: RevenueSource = decode(&result, &source_key(ISSUER));
+    assert_eq!(
+        source.active_issue,
+        Some(anchor_key(issue_key(ISSUER, NEXT_SEQ))),
+        "the source did not move over to the new issue"
+    );
+
+    result
+}
+
+/// An undersubscribed issue with a closed window that nobody has marked yet:
+/// `refund` was never called — there was no one to refund, or not yet.
+fn undersubscribed_unmarked(raised: u64) -> Issue {
+    Issue {
+        subscription_end_ts: NOW,
+        raised,
+        ..stored_issue(IssueState::Subscribing, 0)
+    }
+}
+
+#[test]
+fn a_repaid_issue_gives_its_source_to_the_next_one() {
+    let previous = Issue {
+        raised: 250_000_000_000,
+        repaid_total: 273_750_000_000,
+        ..stored_issue(IssueState::Repaid, 0)
+    };
+    let result = replace(previous.clone());
+
+    let after: Issue = decode(&result, &previous_key());
+    assert_eq!(after.state, IssueState::Repaid);
+    assert_eq!(after.repaid_total, previous.repaid_total);
+
+    // The history does not start over — that is the point of replacing. The
+    // `FR-030` snapshot is taken again: "before the issue" now means this one.
+    let source: RevenueSource = decode(&result, &source_key(ISSUER));
+    assert_eq!(source.first_seen_ts, NOW - 30 * DAY);
+    assert_eq!(source.observed_before_issue, OBSERVED);
+}
+
+#[test]
+fn a_failed_issue_gives_its_source_to_the_next_one() {
+    let result = replace(Issue {
+        raised: 40_000_000_000,
+        ..stored_issue(IssueState::Failed, 0)
+    });
+
+    let after: Issue = decode(&result, &previous_key());
+    assert_eq!(after.state, IssueState::Failed);
+    // Replacing does not touch refunds: what was raised stays where it is.
+    assert_eq!(after.raised, 40_000_000_000);
+}
+
+/// An issue nobody subscribed to never gets `Failed` — and without this rule
+/// it would hold the source forever. Replacing writes the state itself.
+#[test]
+fn an_issue_nobody_subscribed_to_gives_its_source_up_and_is_marked_failed() {
+    let result = replace(undersubscribed_unmarked(0));
+
+    let after: Issue = decode(&result, &previous_key());
+    assert_eq!(after.state, IssueState::Failed);
+}
+
+/// The same with contributions: after the replacement investors take theirs
+/// back through `refund`, which accepts `Failed`.
+#[test]
+fn a_partly_subscribed_issue_past_its_window_is_marked_failed_and_keeps_its_money() {
+    let result = replace(undersubscribed_unmarked(40_000_000_000));
+
+    let after: Issue = decode(&result, &previous_key());
+    assert_eq!(after.state, IssueState::Failed);
+    assert_eq!(after.raised, 40_000_000_000);
+}
+
+/// The T040a negative set: a live issue is not replaced. `Subscribing` is here
+/// twice — with the window open one second before closing, and with a full
+/// raise on a closed one (`subscribe` never leaves that state, but the rule
+/// must not rely on it).
+#[test]
+fn a_live_issue_is_never_replaced() {
+    let live = [
+        Issue {
+            subscription_end_ts: NOW + 1,
+            ..undersubscribed_unmarked(40_000_000_000)
+        },
+        undersubscribed_unmarked(250_000_000_000),
+        Issue {
+            raised: 250_000_000_000,
+            ..stored_issue(IssueState::Funded, 0)
+        },
+        repaying(100_000_000_000, 0),
+        Issue {
+            maturity_ts: NOW - DAY,
+            ..repaying(100_000_000_000, 0)
+        },
+        Issue {
+            state: IssueState::PastDue,
+            maturity_ts: NOW - DAY,
+            ..repaying(100_000_000_000, 0)
+        },
+    ];
+
+    for previous in live {
+        let result = setup().process_instruction(
+            &replace_ix(previous_key()),
+            &replace_accounts(
+                Some(previous_key()),
+                (previous_key(), anchor_account(&previous)),
+            ),
+        );
+
+        assert_eq!(
+            result.program_result,
+            mollusk_svm::result::ProgramResult::Failure(ProgramError::Custom(u32::from(
+                ClubError::SourceAlreadyPledged
+            ))),
+            "{:?} was replaced",
+            previous.state
+        );
+    }
+}
+
+/// A finished issue that the source does **not** back frees nothing:
+/// otherwise any old repaid bond would unlock a source with a live one.
+#[test]
+fn a_finished_issue_that_is_not_the_active_one_frees_nothing() {
+    let stranger = issue_key(ISSUER, 7);
+    let finished = Issue {
+        seq: 7,
+        bump: issue_pda(source_key(ISSUER), 7).1,
+        ..stored_issue(IssueState::Repaid, 0)
+    };
+
+    setup().process_and_validate_instruction(
+        &replace_ix(stranger),
+        &replace_accounts(Some(previous_key()), (stranger, anchor_account(&finished))),
+        &[custom(ClubError::SourceNotPledged)],
+    );
+}
+
+/// A predecessor for a free source — the same ring that does not close.
+#[test]
+fn a_free_source_takes_no_previous_issue() {
+    setup().process_and_validate_instruction(
+        &replace_ix(previous_key()),
+        &replace_accounts(
+            None,
+            (
+                previous_key(),
+                anchor_account(&stored_issue(IssueState::Repaid, 0)),
+            ),
+        ),
+        &[custom(ClubError::SourceNotPledged)],
+    );
+}
+
+/// Another source's issue under the active key: `has_one` catches it before
+/// the state is even looked at.
+#[test]
+fn an_issue_of_another_source_cannot_stand_in_for_the_previous_one() {
+    let foreign = Issue {
+        source: anchor_key(source_key(OUTSIDER)),
+        ..stored_issue(IssueState::Repaid, 0)
+    };
+
+    setup().process_and_validate_instruction(
+        &replace_ix(previous_key()),
+        &replace_accounts(
+            Some(previous_key()),
+            (previous_key(), anchor_account(&foreign)),
+        ),
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintHasOne)],
+    );
+}
+
+/// Replacing does not bypass admission: the history rule holds for the second
+/// issue of the same source too.
+#[test]
+fn replacing_still_requires_revenue_history() {
+    let mut accounts = replace_accounts(
+        Some(previous_key()),
+        (
+            previous_key(),
+            anchor_account(&stored_issue(IssueState::Repaid, 0)),
+        ),
+    );
+    accounts = replacing(
+        &accounts,
+        source_key(ISSUER),
+        anchor_account(&RevenueSource {
+            total_observed: 0,
+            ..stored_source(ISSUER, Some(previous_key()))
+        }),
+    );
+
+    setup().process_and_validate_instruction(
+        &replace_ix(previous_key()),
+        &accounts,
+        &[custom(ClubError::NoRevenueObserved)],
     );
 }
 

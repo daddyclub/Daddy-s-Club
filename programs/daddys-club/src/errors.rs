@@ -5,8 +5,7 @@
 //! і те, і те має бути видно оком при читанні цього файлу.
 //!
 //! Невживані варіанти тут є, і кожен із них зарезервований під **названу**
-//! задачу: `InsufficientRevenueHistory` — під поріг допуску (`T040`),
-//! `IssueNotMatured` — під past due (`T042`). Ознака резерву — вимога в докстрінгу: варіант без
+//! задачу: `IssueNotMatured` — під past due (`T042`). Ознака резерву — вимога в докстрінгу: варіант без
 //! вимоги і без ловця це не резерв, а сміття. Три таких прибрано на закритті M1
 //! (`PositionNotOpen`, `PledgeExceedsInflow`, `NotImplemented`) — одним заходом,
 //! бо кожне видалення зсуває коди наступних. Ще два — на `T032`:
@@ -168,6 +167,15 @@ pub enum ClubError {
     /// Чекпоінт не може випереджати індекс: це зіпсований облік, а не нуль.
     #[msg("Checkpoint is ahead of the payout index")]
     CheckpointAheadOfIndex,
+
+    // ---- Appended after deployment ----
+    // The order is no longer free (see the header): new variants go here only.
+    /// `FR-007`: the threshold has been sat out, but not a cent has gone
+    /// through the intercept. Apart from `InsufficientRevenueHistory` because
+    /// the issuer's next step differs: there — wait, here — route revenue
+    /// through the hook.
+    #[msg("Revenue source has not passed any revenue through the intercept yet")]
+    NoRevenueObserved,
 }
 
 #[cfg(test)]
@@ -209,6 +217,7 @@ mod tests {
         ClubError::MathOverflow,
         ClubError::ZeroBondSupply,
         ClubError::CheckpointAheadOfIndex,
+        ClubError::NoRevenueObserved,
     ];
 
     #[test]

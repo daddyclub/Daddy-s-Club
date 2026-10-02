@@ -437,6 +437,8 @@ fn create_issue_ix(face: u64) -> Instruction {
             AccountMeta::new(extra_metas_pda(BOND_MINT).0, false),
             AccountMeta::new_readonly(token_program().0, false),
             AccountMeta::new_readonly(system_program().0, false),
+            // No previous issue: the source is free.
+            AccountMeta::new_readonly(club_id(), false),
         ],
     )
 }
@@ -821,7 +823,11 @@ fn base_store() -> Store {
     let mut store = Store::new();
 
     store.insert(config_pda().0, anchor_account(&stored_config()));
-    store.insert(demo_source(), anchor_account(&stored_source(None, 0)));
+    // `FR-007`: an issue is admitted only on a source that has already seen revenue.
+    store.insert(
+        demo_source(),
+        anchor_account(&stored_source(None, OBSERVED_BEFORE)),
+    );
     store.insert(ISSUER, wallet());
     store.insert(ISSUER_USDC, usdc_account(ISSUER, PREPAY_FUNDS));
     store.insert(FEE_VAULT, usdc_account(ADMIN, 0));
