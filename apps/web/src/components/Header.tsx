@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import { PROTOCOL_SETTINGS, TODAY } from '@/data/mock';
-import { clock, percent } from '@/lib/format';
+import { useProtocolConfig } from '@/hooks/useMarket';
+import { webEnv } from '@/lib/env';
+import { bps, calendarDay, clock, percent } from '@/lib/format';
+import { sharedFeed } from '@/lib/rpc';
 import SplitFlap from './SplitFlap';
 
 const NAV = [
@@ -11,13 +14,43 @@ const NAV = [
   { to: '/live/issue', label: 'Live issue', end: false },
 ];
 
+/** The demo board's fixed day and settings: they belong to its made-up figures. */
+const DemoFees = () => (
+  <>
+    <span>Origination fee {percent(PROTOCOL_SETTINGS.originationFeePct)}</span>
+    <span>Secondary trading fee {percent(PROTOCOL_SETTINGS.secondaryFeePct)}</span>
+    <span>Maximum revenue share {percent(PROTOCOL_SETTINGS.maxRevenueSharePct)}</span>
+  </>
+);
+
+/** On a live screen the fees are the protocol config on chain, as the program charges them. */
+const LiveFees = () => {
+  const env = webEnv();
+  const feed = useMemo(() => sharedFeed(env.rpcUrl), [env.rpcUrl]);
+  const state = useProtocolConfig(feed, env.programId);
+  if (state.status === 'loading') return <span>Protocol fees &hellip;</span>;
+  if (state.status === 'failed') return <span>Protocol fees unavailable</span>;
+  const { config } = state;
+  return (
+    <>
+      <span>Origination fee {bps(config.originationFeeBps)}</span>
+      <span>Secondary trading fee {bps(config.tradingFeeBps)}</span>
+      <span>Maximum revenue share {bps(config.maxPledgeBps)}</span>
+    </>
+  );
+};
+
 const Header = () => {
-  const [now, setNow] = useState(() => clock(new Date()));
+  const [now, setNow] = useState(() => new Date());
+  // Same split as the footnote in `App.tsx`: live screens read the chain and today's date.
+  const live = useLocation().pathname.startsWith('/live/');
 
   useEffect(() => {
-    const id = window.setInterval(() => setNow(clock(new Date())), 1000);
+    const id = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(id);
   }, []);
+
+  const time = clock(now);
 
   return (
     <header className="border-b border-board-ink">
@@ -36,9 +69,9 @@ const Header = () => {
         <div className="flex items-end gap-6">
           <div className="text-right">
             <div className="mb-1 text-[10px] uppercase tracking-[0.24em] text-board-dim">
-              {TODAY} &middot; board time
+              {live ? calendarDay(now) : TODAY} &middot; board time
             </div>
-            <SplitFlap value={now} size="sm" label={`Board time ${now}`} />
+            <SplitFlap value={time} size="sm" label={`Board time ${time}`} />
           </div>
         </div>
       </div>
@@ -64,9 +97,7 @@ const Header = () => {
             ))}
           </nav>
           <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-[10px] uppercase tracking-[0.16em] text-board-dim">
-            <span>Origination fee {percent(PROTOCOL_SETTINGS.originationFeePct)}</span>
-            <span>Secondary trading fee {percent(PROTOCOL_SETTINGS.secondaryFeePct)}</span>
-            <span>Maximum revenue share {percent(PROTOCOL_SETTINGS.maxRevenueSharePct)}</span>
+            {live ? <LiveFees /> : <DemoFees />}
           </div>
         </div>
       </div>

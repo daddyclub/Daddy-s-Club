@@ -17,6 +17,15 @@ export const clock = (date: Date): string =>
     .map((part) => part.toString().padStart(2, '0'))
     .join(':');
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * The board's day, in the same zone as `clock`, so the date and the time next
+ * to it turn over together at midnight. Same shape as the demo board: "07 Oct 2026".
+ */
+export const calendarDay = (date: Date): string =>
+  `${date.getDate().toString().padStart(2, '0')} ${MONTHS[date.getMonth()]} ${date.getFullYear()}`;
+
 /**
  * Мітка часу з ланцюга (`i64`, секунди) у дату. UTC навмисно: `maturity_ts`
  * порівнюється з годинником ланцюга, а не з тим, у якому поясі стоїть глядач.
