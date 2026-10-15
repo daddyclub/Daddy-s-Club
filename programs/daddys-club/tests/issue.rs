@@ -197,6 +197,34 @@ fn a_fresh_issue_owes_face_plus_coupon_and_has_repaid_nothing() {
     assert_eq!(issue.state, IssueState::Subscribing);
 }
 
+/// `FR-022` sets the past-due share at the protocol cap, and `FR-036` keeps a
+/// later change of the cap away from issues that already exist. So the cap is
+/// frozen here, with the other terms, and the investor sees from day one what
+/// overdue will cost the issuer. A cap other than the demo one shows that it
+/// is read from the config and not copied from the terms.
+#[test]
+fn an_issue_freezes_the_protocol_cap_as_its_past_due_share() {
+    let cap = 2_500;
+    let config = ProtocolConfig {
+        max_pledge_bps: cap,
+        ..stored_config()
+    };
+
+    let result = setup().process_and_validate_instruction(
+        &create_ix(ISSUER, ISSUE_SEQ, terms()),
+        &replacing(
+            &create_accounts(ISSUER, ISSUE_SEQ),
+            config_pda().0,
+            anchor_account(&config),
+        ),
+        &[Check::success()],
+    );
+
+    let issue: Issue = decode(&result, &issue_key(ISSUER, ISSUE_SEQ));
+    assert_eq!(issue.past_due_pledge_bps, cap);
+    assert_eq!(issue.pledge_bps, terms().pledge_bps);
+}
+
 /// `FR-006`: джерело зайняте випуском, і саме цей `Some` закриє дорогу другому.
 /// Заразом знімається зріз доходу під `FR-030` — потім відрізнити «до» від
 /// «після» вже нічим.

@@ -52,7 +52,7 @@ export const DISCRIMINATORS: Readonly<Record<AccountKind, Uint8Array>> = {
 export const ACCOUNT_SPACE: Readonly<Record<AccountKind, number>> = {
   ProtocolConfig: 127,
   RevenueSource: 162,
-  Issue: 214,
+  Issue: 216,
   HolderCheckpoint: 97,
   Offer: 121,
 };
@@ -119,6 +119,8 @@ export interface Issue {
   readonly state: IssueState;
   readonly seq: bigint;
   readonly bump: number;
+  /** The share past due, frozen from the protocol cap at creation (`FR-022`). */
+  readonly pastDuePledgeBps: number;
 }
 
 /** Облік власника за випуском (`FR-016`, `FR-038`). */
@@ -323,6 +325,7 @@ export function decodeIssue(data: unknown): Issue {
     state: r.issueState(),
     seq: r.u64(),
     bump: r.u8(),
+    pastDuePledgeBps: r.u16(),
   };
 }
 

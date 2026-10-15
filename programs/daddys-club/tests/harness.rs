@@ -327,12 +327,13 @@ pub fn stored_issue(state: IssueState, payout_index: u128) -> Issue {
         state,
         seq: ISSUE_SEQ,
         bump: issue_pda(demo_source(), ISSUE_SEQ).1,
+        past_due_pledge_bps: demo_config_params().max_pledge_bps,
     }
 }
 
-/// Випуск у погашенні: номінал зібрано, гроші видано, зобов'язання живе. Це
-/// єдиний стан, у якому перехоплення розщеплює потік, тому з нього починається
-/// кожен тест про гроші.
+/// An issue in repayment: the face is raised, paid out, and the obligation is
+/// open. Every money test starts here; past due (`FR-022`), the only other
+/// state the intercept splits in, is reached from this one.
 pub fn repaying(repaid_total: u64, payout_index: u128) -> Issue {
     let issue = stored_issue(IssueState::Repaying, payout_index);
 
@@ -797,6 +798,7 @@ mod tests {
             state: IssueState::Subscribing,
             seq: 0,
             bump: issue_pda(source, 0).1,
+            past_due_pledge_bps: u16::MAX,
         };
 
         let account = anchor_account(&issue);

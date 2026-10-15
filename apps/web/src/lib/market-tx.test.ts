@@ -40,6 +40,7 @@ const issue: Issue = {
   state: 'Repaying',
   seq: 0n,
   bump: 255,
+  pastDuePledgeBps: 0,
 };
 const config: ProtocolConfig = {
   admin: key(13),

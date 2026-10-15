@@ -1,5 +1,5 @@
 //! Джерело revenue: реєстрація (`FR-004`, `FR-028`) і перехоплення доходу
-//! (`FR-014`, `FR-019`, `FR-020`).
+//! (`FR-014`, `FR-019`, `FR-020`, `FR-022`).
 //!
 //! Реєстрація — це підключення перехоплення, а не заявка: з цієї миті джерело
 //! накопичує історію (`FR-028`), і саме її тривалість потім вирішує, чи
@@ -21,7 +21,7 @@ use {
         errors::ClubError,
         instructions::issue::credit_repayment,
         math,
-        state::{Issue, IssueState, ProtocolConfig, RevenueSource, CONFIG_SEED, SOURCE_SEED},
+        state::{Issue, ProtocolConfig, RevenueSource, CONFIG_SEED, SOURCE_SEED},
     },
     anchor_lang::prelude::*,
     anchor_spl::{
@@ -159,6 +159,8 @@ pub struct Intercept<'info> {
 ///   закрите (`Repaid`) — так само лише спостерігається. Друге і є `FR-019`:
 ///   перехоплення припиняється саме, без окремої дії емітента;
 /// - випуск у погашенні — потік розщеплюється тут же, у тій самій транзакції.
+///   Past due (`FR-022`) splits the same way, only at the cap frozen into the
+///   issue; the first fee on or after the maturity date moves it there.
 ///
 /// `amount` приходить від емітента, і перевірити його ланцюг не може: скільки
 /// комісії виникло, знає лише та інструкція, всередині якої це сталося.
@@ -175,6 +177,13 @@ pub fn intercept(ctx: Context<Intercept>, amount: u64) -> Result<()> {
     let observed = u64::try_from(observed).map_err(|_| error!(ClubError::MathOverflow))?;
     ctx.accounts.source.total_observed = observed;
 
+    // `FR-022`: nobody marks an issue past due — the first fee on or after
+    // the date does, and is split at the new share in the same call.
+    let now = Clock::get()?.unix_timestamp;
+    if let Some(issue) = ctx.accounts.issue.as_mut() {
+        issue.fall_due(now);
+    }
+
     let (Some(issue), Some(escrow_vault), Some(bond_mint)) = (
         ctx.accounts.issue.as_ref(),
         ctx.accounts.escrow_vault.as_ref(),
@@ -184,13 +193,10 @@ pub fn intercept(ctx: Context<Intercept>, amount: u64) -> Result<()> {
     };
 
     // `FR-012` провів межу: зобов'язання виникає з видачею, і до неї потік
-    // емітента наш. `PastDue` тут навмисно **не** проходить: `FR-022` вимагає
-    // на ньому іншої ставки — стелі протоколу, — і пропустити його на
-    // `pledge_bps` означало б розщепити правильно виглядаючою, але хибною
-    // часткою. Стан додасть T042 разом зі ставкою.
-    if issue.state != IssueState::Repaying {
+    // емітента наш.
+    let Some(share_bps) = issue.intercepted_bps() else {
         return Ok(());
-    }
+    };
 
     // `FR-020`: у сховище йде частка, але не більше за залишок зобов'язання.
     // Надлишок нікуди не переказується — він просто не залишає рахунку
@@ -198,7 +204,7 @@ pub fn intercept(ctx: Context<Intercept>, amount: u64) -> Result<()> {
     let remaining = u128::from(issue.obligation_total)
         .checked_sub(u128::from(issue.repaid_total))
         .ok_or(ClubError::MathOverflow)?;
-    let split = math::split_intercept(u128::from(amount), issue.pledge_bps, remaining)
+    let split = math::split_intercept(u128::from(amount), share_bps, remaining)
         .ok_or(ClubError::MathOverflow)?;
 
     // Пропозиція бонду знімається до переказу: після нього набір акаунтів уже

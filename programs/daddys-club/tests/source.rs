@@ -11,6 +11,10 @@
 //! видано, вже погашено — усе це проходить успішно й лишає гроші емітенту.
 //! Відмовляють лише права й неузгоджений набір акаунтів, і кожна така відмова
 //! має тут свій тест.
+//!
+//! The last part is past due (`FR-022`). Here time matters for the first
+//! time, so those tests set the chain clock themselves and stand on both sides
+//! of the maturity second.
 
 #[path = "harness.rs"]
 mod harness;
@@ -429,16 +433,11 @@ fn the_history_counts_the_whole_inflow_not_the_intercepted_share() {
 /// Перехоплення — фільтр, а не ворота. Випуск, зобов'язання по якому ще не
 /// виникло, пропускає потік цілим: `FR-012` провів межу видачею, а відмова тут
 /// завалила б чужий своп, тобто не пропустила б комісію ані нам, ані емітенту.
-///
-/// `PastDue` у цьому ж списку навмисно: `FR-022` вимагає на ньому іншої ставки,
-/// і до T042 випуск у простроченні не розщеплює нічого — це чесніше, ніж
-/// розщепити хибною часткою.
 #[test]
 fn an_issue_that_is_not_in_repayment_lets_the_whole_flow_through() {
     for state in [
         IssueState::Subscribing,
         IssueState::Funded,
-        IssueState::PastDue,
         IssueState::Failed,
     ] {
         let issue = Issue {
@@ -623,4 +622,175 @@ fn the_vault_must_answer_to_the_key_that_signed() {
             anchor_lang::error::ErrorCode::ConstraintTokenOwner,
         )],
     );
+}
+
+// ---- Past due (`FR-022`) ---------------------------------------------------
+
+/// `INFLOW` at the demo protocol cap of 30%: `1_070_000_000 × 3_000 / 10_000`.
+const SHARE_AT_CAP: u64 = 321_000_000;
+
+fn intercept_at(now: i64, issue: Issue) -> InstructionResult {
+    let mut mollusk = setup();
+    mollusk.sysvars.clock.unix_timestamp = now;
+
+    mollusk.process_and_validate_instruction(
+        &intercept_ix(call()),
+        &intercept_accounts(stored_source(Some(demo_issue()), 0), Some(issue)),
+        &[Check::success()],
+    )
+}
+
+/// The share the issue was created with stays the cap the protocol had then.
+#[test]
+fn the_demo_issue_carries_the_cap_it_was_created_under() {
+    assert_eq!(
+        repaying(0, 0).past_due_pledge_bps,
+        stored_config().max_pledge_bps
+    );
+    assert_eq!(
+        u128::from(SHARE_AT_CAP),
+        daddys_club::math::pledged_share(u128::from(INFLOW), stored_config().max_pledge_bps)
+            .expect("the share fits")
+    );
+}
+
+/// One second before the date the debt is still on time: the agreed share,
+/// and the state stays.
+#[test]
+fn an_inflow_a_second_before_maturity_is_split_at_the_agreed_share() {
+    let issue = repaying(0, 0);
+    let result = intercept_at(issue.maturity_ts - 1, issue);
+
+    assert_eq!(token_balance(&result, &ESCROW_VAULT), SHARE);
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(issue.state, IssueState::Repaying);
+}
+
+/// On the date itself an open obligation is already overdue. Nobody marks it:
+/// the first fee after the date writes the state and is split at the cap in
+/// the same call, so the higher share starts with the first money there is.
+#[test]
+fn the_first_inflow_on_the_maturity_date_makes_the_issue_past_due() {
+    let issue = repaying(0, 0);
+    let result = intercept_at(issue.maturity_ts, issue);
+
+    assert_eq!(token_balance(&result, &ESCROW_VAULT), SHARE_AT_CAP);
+    assert_eq!(
+        token_balance(&result, &SOURCE_VAULT),
+        VAULT_BALANCE - SHARE_AT_CAP
+    );
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(issue.state, IssueState::PastDue);
+    assert_eq!(issue.repaid_total, SHARE_AT_CAP);
+    assert_eq!(
+        issue.payout_index,
+        u128::from(SHARE_AT_CAP) * INDEX_PER_UNIT
+    );
+}
+
+/// Past due speeds repayment up and does not make the debt dearer: the
+/// obligation is the one fixed at creation, to the unit.
+#[test]
+fn going_past_due_does_not_grow_the_obligation() {
+    let issue = repaying(0, 0);
+    let owed = issue.obligation_total;
+    let result = intercept_at(issue.maturity_ts, issue);
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(
+        issue.state,
+        IssueState::PastDue,
+        "the issue never went past due"
+    );
+    assert_eq!(issue.obligation_total, owed);
+}
+
+/// The share is the one frozen into the issue, not whatever the protocol cap
+/// is today (`FR-036`): the config is not even in the set of accounts. An
+/// issue frozen at 20% is split at 20%.
+#[test]
+fn a_past_due_issue_is_split_at_its_own_frozen_cap() {
+    let frozen = 2_000;
+    let issue = Issue {
+        state: IssueState::PastDue,
+        past_due_pledge_bps: frozen,
+        ..repaying(0, 0)
+    };
+    let result = intercept_at(issue.maturity_ts + 30 * DAY, issue);
+
+    assert_eq!(
+        u128::from(token_balance(&result, &ESCROW_VAULT)),
+        daddys_club::math::pledged_share(u128::from(INFLOW), frozen).expect("the share fits")
+    );
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(issue.state, IssueState::PastDue);
+}
+
+/// There is no way back to the agreed share: a past-due issue keeps the cap
+/// for every later fee until it is repaid.
+#[test]
+fn a_past_due_issue_keeps_the_cap_for_every_later_fee() {
+    let issue = Issue {
+        state: IssueState::PastDue,
+        ..repaying(SHARE_AT_CAP, u128::from(SHARE_AT_CAP) * INDEX_PER_UNIT)
+    };
+    let result = intercept_at(issue.maturity_ts + DAY, issue);
+
+    assert_eq!(token_balance(&result, &ESCROW_VAULT), SHARE_AT_CAP);
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(issue.state, IssueState::PastDue);
+    assert_eq!(issue.repaid_total, 2 * SHARE_AT_CAP);
+}
+
+/// At the cap the last inflow still takes only what is left (`FR-020`) and
+/// closes the obligation (`FR-019`): past due ends the only way it can.
+#[test]
+fn a_past_due_issue_is_closed_by_the_inflow_that_covers_the_rest() {
+    let obligation = repaying(0, 0).obligation_total;
+    let tail = 50_000_000;
+
+    let issue = Issue {
+        state: IssueState::PastDue,
+        ..repaying(obligation - tail, 0)
+    };
+    let result = intercept_at(issue.maturity_ts + DAY, issue);
+
+    assert_eq!(token_balance(&result, &ESCROW_VAULT), tail);
+
+    let issue: Issue = decode(&result, &demo_issue());
+    assert_eq!(issue.repaid_total, obligation);
+    assert_eq!(issue.state, IssueState::Repaid);
+}
+
+/// Only an obligation can be overdue. Before the payout there is none
+/// (`FR-012`), after full repayment there is none left, and an
+/// undersubscribed issue never gets one — the date changes none of these,
+/// and the flow goes through whole.
+#[test]
+fn an_issue_without_an_open_obligation_is_never_past_due() {
+    for state in [
+        IssueState::Subscribing,
+        IssueState::Funded,
+        IssueState::Repaid,
+        IssueState::Failed,
+    ] {
+        let issue = Issue {
+            raised: stored_issue(state, 0).face,
+            ..stored_issue(state, 0)
+        };
+        let result = intercept_at(issue.maturity_ts + DAY, issue);
+
+        assert_eq!(
+            token_balance(&result, &SOURCE_VAULT),
+            VAULT_BALANCE,
+            "{state:?} split the flow after the date"
+        );
+
+        let issue: Issue = decode(&result, &demo_issue());
+        assert_eq!(issue.state, state, "{state:?} changed its state");
+    }
 }

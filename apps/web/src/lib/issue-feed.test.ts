@@ -55,7 +55,7 @@ interface IssueFields {
  * у SDK; тут вона лише використовується.
  */
 function issueBytes(fields: IssueFields): Uint8Array {
-  const bytes = new Uint8Array(8 + 214);
+  const bytes = new Uint8Array(8 + 216);
   bytes.set(DISCRIMINATORS.Issue, 0);
   const view = new DataView(bytes.buffer);
 
@@ -90,6 +90,8 @@ function issueBytes(fields: IssueFields): Uint8Array {
   offset += 1;
   u64(0n); // seq
   view.setUint8(offset, 255); // bump
+  offset += 1;
+  u16(3_000); // past_due_pledge_bps
 
   return bytes;
 }

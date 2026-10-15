@@ -124,6 +124,7 @@ const issue: Issue = {
   state: 'Repaying',
   seq: 3n,
   bump: 255,
+  pastDuePledgeBps: 3_000,
 };
 const ISSUE = issuePda(SOURCE, 3n).address;
 

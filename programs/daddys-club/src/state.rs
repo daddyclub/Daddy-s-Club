@@ -100,6 +100,11 @@ pub struct Issue {
     pub state: IssueState,
     pub seq: u64,
     pub bump: u8,
+    /// The share intercepted once the issue is past due (`FR-022`): the
+    /// protocol cap as it stood at creation. Frozen with the terms, because a
+    /// later change of the cap must not reach an existing issue (`FR-036`).
+    /// Last in the layout so the offsets clients already read do not move.
+    pub past_due_pledge_bps: u16,
 }
 
 impl Issue {
@@ -120,6 +125,29 @@ impl Issue {
             IssueState::Repaid | IssueState::Failed => true,
             IssueState::Subscribing => now >= self.subscription_end_ts && self.raised < self.face,
             IssueState::Funded | IssueState::Repaying | IssueState::PastDue => false,
+        }
+    }
+
+    /// `FR-022`: an obligation still open on its maturity date is past due.
+    /// On the date itself, not a second later: by then it had to be closed.
+    /// Only `Repaying` falls due — before the payout there is no obligation,
+    /// and nothing leads back, so past due ends only in `Repaid`.
+    pub fn fall_due(&mut self, now: i64) {
+        if self.state == IssueState::Repaying && now >= self.maturity_ts {
+            self.state = IssueState::PastDue;
+        }
+    }
+
+    /// The share the intercept takes from a fee, or `None` when this state
+    /// does not split the flow.
+    pub fn intercepted_bps(&self) -> Option<u16> {
+        match self.state {
+            IssueState::Repaying => Some(self.pledge_bps),
+            IssueState::PastDue => Some(self.past_due_pledge_bps),
+            IssueState::Subscribing
+            | IssueState::Funded
+            | IssueState::Repaid
+            | IssueState::Failed => None,
         }
     }
 }
@@ -204,7 +232,7 @@ mod tests {
         // видно як зміну цифри, а не тільки як зрослу оренду.
         assert_eq!(ProtocolConfig::INIT_SPACE, 127);
         assert_eq!(RevenueSource::INIT_SPACE, 162);
-        assert_eq!(Issue::INIT_SPACE, 214);
+        assert_eq!(Issue::INIT_SPACE, 216);
         assert_eq!(HolderCheckpoint::INIT_SPACE, 97);
     }
 }

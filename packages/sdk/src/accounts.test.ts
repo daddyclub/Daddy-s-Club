@@ -173,6 +173,7 @@ const ISSUE_BYTES = account(
   u8(2),
   u64(3n),
   u8(252),
+  u16(2500),
 );
 
 const HOLDER_BYTES = account(
@@ -315,6 +316,7 @@ describe('Issue (FR-001, FR-015)', () => {
       state: 'Repaying',
       seq: 3n,
       bump: 252,
+      pastDuePledgeBps: 2500,
     });
   });
 

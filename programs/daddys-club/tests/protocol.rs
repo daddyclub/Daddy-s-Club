@@ -377,6 +377,7 @@ fn update_config_does_not_reach_an_issue_that_already_exists() {
         state: IssueState::Repaying,
         seq: 0,
         bump: issue_bump,
+        past_due_pledge_bps: 3_000,
     };
     let before = anchor_account(&issue);
 
@@ -401,6 +402,7 @@ fn update_config_does_not_reach_an_issue_that_already_exists() {
     let after: Issue = decode(&result, &issue_key);
 
     assert_eq!(after.pledge_bps, issue.pledge_bps);
+    assert_eq!(after.past_due_pledge_bps, issue.past_due_pledge_bps);
     assert_eq!(after.obligation_total, issue.obligation_total);
     assert_eq!(after.state, issue.state);
     assert_eq!(
