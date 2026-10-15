@@ -51,7 +51,9 @@ What does not exist yet:
 
 - a catalogue of issues and risk metrics for the issuer — buying a bond is
   possible, judging whose it is is not;
-- an admission threshold — in this version anyone can create an issue.
+- a review of issuers — an issue opens only on revenue that has already passed
+  through the split for the protocol's threshold (two minutes on devnet, so the
+  demo cycle fits); nobody judges the protocol behind it.
 
 One issuer, and it is our own demo issuer.
 
