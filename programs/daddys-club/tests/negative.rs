@@ -33,6 +33,14 @@
 //! - **Пропозиція бонду після заморозки умов** (`FR-013`). Що мінтом володіє
 //!   PDA випуску, `tests/issue.rs` показує на створенні; що з цього випливає —
 //!   не показує ніде.
+//! - **Admission without history** (`FR-007`). The threshold's edges live in
+//!   `tests/issue.rs`, measured for the issuer alone. Here is what the spec
+//!   adds — "neither the issuer nor the admin can bypass it": every wallet
+//!   waits out the same threshold on a source of its own, nobody borrows the
+//!   issuer's history, a backdated source or a laxer config brought along with
+//!   the issue is not the protocol's, and a finished predecessor is no ticket.
+//!   The admin's one real lever, `update_config`, moves the threshold for
+//!   everyone at once, never for one issue.
 //!
 //! Чого тут навмисно **немає**, бо воно вже перевірене по своїх файлах:
 //! `withdraw_proceeds` до повного збору — `an_issue_that_was_not_funded_pays_the_issuer_nothing`
@@ -73,7 +81,7 @@ use {
         errors::ClubError,
         instructions::issue::IssueParams,
         math,
-        state::{HolderCheckpoint, Issue, IssueState, RevenueSource},
+        state::{HolderCheckpoint, Issue, IssueState, ProtocolConfig, RevenueSource},
     },
     harness::*,
     mollusk_svm::result::{Check, InstructionResult},
@@ -830,5 +838,263 @@ fn nothing_but_the_flag_stands_between_a_direct_call_and_the_ledger() {
         ledger_after(&result, BUYER).accrued,
         0,
         "замок знято, а {honest} у другої сторони вціліли — тест міряє не те"
+    );
+}
+
+// ---- Admission: history is not bypassed (`FR-007`) -------------------------
+
+/// Where a forged source or config is laid out instead of the protocol's own.
+const FORGED: Pubkey = Pubkey::new_from_array([57u8; 32]);
+/// A program the attacker controls and can make own any account it creates.
+const FORGER_PROGRAM: Pubkey = Pubkey::new_from_array([58u8; 32]);
+
+/// Position of the optional previous issue in `CreateIssue`.
+const PREVIOUS_ISSUE: usize = 11;
+
+fn create_ix(config: Pubkey, source: Pubkey, issuer: Pubkey, seq: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        club_id(),
+        &daddys_club::instruction::CreateIssue {
+            seq,
+            params: terms(),
+        }
+        .data(),
+        vec![
+            AccountMeta::new_readonly(config, false),
+            AccountMeta::new(source, false),
+            AccountMeta::new(issue_pda(source, seq).0, false),
+            AccountMeta::new(issuer, true),
+            AccountMeta::new_readonly(USDC_MINT, false),
+            AccountMeta::new(BOND_MINT, true),
+            AccountMeta::new(SUBSCRIPTION_VAULT, true),
+            AccountMeta::new(ESCROW_VAULT, true),
+            AccountMeta::new(extra_metas_pda(BOND_MINT).0, false),
+            AccountMeta::new_readonly(token_program().0, false),
+            AccountMeta::new_readonly(system_program().0, false),
+            AccountMeta::new_readonly(club_id(), false),
+        ],
+    )
+}
+
+fn create_world(
+    config: (Pubkey, Account),
+    source: (Pubkey, Account),
+    issuer: Pubkey,
+    seq: u64,
+) -> Vec<(Pubkey, Account)> {
+    let issue = issue_pda(source.0, seq).0;
+
+    vec![
+        config,
+        source,
+        (issue, uninitialized()),
+        (issuer, wallet()),
+        (USDC_MINT, usdc_mint(0)),
+        (BOND_MINT, uninitialized()),
+        (SUBSCRIPTION_VAULT, uninitialized()),
+        (ESCROW_VAULT, uninitialized()),
+        (extra_metas_pda(BOND_MINT).0, uninitialized()),
+        token_program(),
+        system_program(),
+        omitted(club_id()),
+    ]
+}
+
+/// A source whose only flaw is age: money has gone through it, and it is
+/// `short_by` seconds from the protocol threshold.
+fn young_source(issuer: Pubkey, short_by: i64) -> RevenueSource {
+    RevenueSource {
+        first_seen_ts: NOW - stored_config().history_threshold_secs + short_by,
+        total_observed: OBSERVED_BEFORE,
+        ..source_of(issuer, None)
+    }
+}
+
+/// The history an attacker would like to have: a month of revenue.
+fn backdated_source() -> RevenueSource {
+    RevenueSource {
+        total_observed: OBSERVED_BEFORE,
+        ..source_of(ISSUER, None)
+    }
+}
+
+fn the_config() -> (Pubkey, Account) {
+    (config_pda().0, anchor_account(&stored_config()))
+}
+
+fn the_source(source: &RevenueSource) -> (Pubkey, Account) {
+    (demo_source(), anchor_account(source))
+}
+
+fn owned_by_the_forger(mut account: Account) -> Account {
+    account.owner = FORGER_PROGRAM;
+    account
+}
+
+/// The threshold is the same for every wallet, and the admin who sets it is
+/// no exception: issuing on a source of its own, it waits like anyone else.
+/// The second call is the control — the same wallet on a source exactly at
+/// the threshold is admitted, so the refusal is the clock and not the wallet.
+#[test]
+fn no_wallet_is_admitted_on_a_source_without_history() {
+    for (who, issuer) in EVERY_WALLET {
+        let source = source_pda(issuer, SOURCE_SEQ).0;
+
+        println!("issue on its own source a second short of history: {who}");
+        setup().process_and_validate_instruction(
+            &create_ix(config_pda().0, source, issuer, ISSUE_SEQ),
+            &create_world(
+                the_config(),
+                (source, anchor_account(&young_source(issuer, 1))),
+                issuer,
+                ISSUE_SEQ,
+            ),
+            &[club_err(ClubError::InsufficientRevenueHistory)],
+        );
+
+        println!("the same source exactly at the threshold: {who}");
+        setup().process_and_validate_instruction(
+            &create_ix(config_pda().0, source, issuer, ISSUE_SEQ),
+            &create_world(
+                the_config(),
+                (source, anchor_account(&young_source(issuer, 0))),
+                issuer,
+                ISSUE_SEQ,
+            ),
+            &[Check::success()],
+        );
+    }
+}
+
+/// History cannot be borrowed either: a wallet signing over the issuer's
+/// mature source does not get as far as the clock.
+#[test]
+fn no_wallet_borrows_the_history_of_the_issuers_source() {
+    for (who, signer) in EVERY_WALLET.into_iter().filter(|(_, key)| *key != ISSUER) {
+        println!("issue on the issuer's mature source, signed by: {who}");
+        setup().process_and_validate_instruction(
+            &create_ix(config_pda().0, demo_source(), signer, ISSUE_SEQ),
+            &create_world(
+                the_config(),
+                the_source(&backdated_source()),
+                signer,
+                ISSUE_SEQ,
+            ),
+            &[anchor_err(anchor_lang::error::ErrorCode::ConstraintSeeds)],
+        );
+    }
+}
+
+/// The source's history lives in the account, so the shortest bypass is to
+/// write the account. Laid out at an address of one's own, it is not the
+/// source the issuer's seeds lead to; at the right address but created by
+/// another program, it is not ours. Only `register_source` writes
+/// `first_seen_ts`, and from the chain clock.
+#[test]
+fn a_history_written_by_anyone_but_the_program_is_not_history() {
+    setup().process_and_validate_instruction(
+        &create_ix(config_pda().0, FORGED, ISSUER, ISSUE_SEQ),
+        &create_world(
+            the_config(),
+            (FORGED, anchor_account(&backdated_source())),
+            ISSUER,
+            ISSUE_SEQ,
+        ),
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintSeeds)],
+    );
+
+    setup().process_and_validate_instruction(
+        &create_ix(config_pda().0, demo_source(), ISSUER, ISSUE_SEQ),
+        &create_world(
+            the_config(),
+            (
+                demo_source(),
+                owned_by_the_forger(anchor_account(&backdated_source())),
+            ),
+            ISSUER,
+            ISSUE_SEQ,
+        ),
+        &[anchor_err(
+            anchor_lang::error::ErrorCode::AccountOwnedByWrongProgram,
+        )],
+    );
+}
+
+/// The same from the other side: instead of an older source, a laxer
+/// protocol — a config with a one-second threshold, brought along with one's
+/// own issue. The first call is the control: were that config the protocol's,
+/// the young source would pass, so the refusals below are about whose config
+/// it is and not about the value.
+#[test]
+fn a_threshold_brought_along_with_the_issue_is_not_the_protocols() {
+    let lax = ProtocolConfig {
+        history_threshold_secs: 1,
+        ..stored_config()
+    };
+
+    setup().process_and_validate_instruction(
+        &create_ix(config_pda().0, demo_source(), ISSUER, ISSUE_SEQ),
+        &create_world(
+            (config_pda().0, anchor_account(&lax)),
+            the_source(&young_source(ISSUER, 1)),
+            ISSUER,
+            ISSUE_SEQ,
+        ),
+        &[Check::success()],
+    );
+
+    setup().process_and_validate_instruction(
+        &create_ix(FORGED, demo_source(), ISSUER, ISSUE_SEQ),
+        &create_world(
+            (FORGED, anchor_account(&lax)),
+            the_source(&young_source(ISSUER, 1)),
+            ISSUER,
+            ISSUE_SEQ,
+        ),
+        &[anchor_err(anchor_lang::error::ErrorCode::ConstraintSeeds)],
+    );
+
+    setup().process_and_validate_instruction(
+        &create_ix(config_pda().0, demo_source(), ISSUER, ISSUE_SEQ),
+        &create_world(
+            (config_pda().0, owned_by_the_forger(anchor_account(&lax))),
+            the_source(&young_source(ISSUER, 1)),
+            ISSUER,
+            ISSUE_SEQ,
+        ),
+        &[anchor_err(
+            anchor_lang::error::ErrorCode::AccountOwnedByWrongProgram,
+        )],
+    );
+}
+
+/// A finished predecessor is not an admission ticket. The threshold may have
+/// been raised since the first issue, and the next one is measured against
+/// the threshold of its own day — like a source that never had an issue.
+#[test]
+fn a_finished_issue_does_not_carry_its_source_past_the_threshold() {
+    let next = ISSUE_SEQ + 1;
+
+    let mut instruction = create_ix(config_pda().0, demo_source(), ISSUER, next);
+    instruction.accounts[PREVIOUS_ISSUE] = AccountMeta::new(demo_issue(), false);
+
+    let mut world = create_world(
+        the_config(),
+        the_source(&RevenueSource {
+            active_issue: Some(anchor_key(demo_issue())),
+            ..young_source(ISSUER, 1)
+        }),
+        ISSUER,
+        next,
+    );
+    world[PREVIOUS_ISSUE] = (
+        demo_issue(),
+        anchor_account(&stored_issue(IssueState::Repaid, 0)),
+    );
+
+    setup().process_and_validate_instruction(
+        &instruction,
+        &world,
+        &[club_err(ClubError::InsufficientRevenueHistory)],
     );
 }
