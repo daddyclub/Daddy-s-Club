@@ -133,7 +133,7 @@ All three programs are deployed to devnet under the same IDs as in
 | `demo_issuer` | `8wKjGiLvnMTv7oi9PcztmbRv4v63emT2qPPrA8x1fW3z` |
 | protocol config | `4HLq2cCPFRgHurFywRv24eLXxKURyz3To7FF2eGoyeg1` |
 | settlement mint (test USDC, 6 decimals) | `A2BL4NnYRAjAdDyoyVXmpM55CC1EcsX6ELsS4uHqdoYX` |
-| standing demo issue | `DQ3VtusT8kxeByCmWHyejcaSsDpbLfHFFqNjoErGXUMD` |
+| standing demo issue | `9yUKoJBNTn3w55qQV5FBtYuSgLjEtCNFtA1HSkmEyehn` |
 
 The settlement currency is a test mint of our own, not Circle's devnet USDC:
 the demo needs amounts no faucet hands out. Visitors can watch the standing
