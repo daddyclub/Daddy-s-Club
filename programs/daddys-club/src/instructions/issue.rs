@@ -376,6 +376,7 @@ pub fn create_issue(ctx: Context<CreateIssue>, seq: u64, params: IssueParams) ->
     issue.coupon_bps = params.coupon_bps;
     issue.pledge_bps = params.pledge_bps;
     issue.past_due_pledge_bps = ctx.accounts.config.max_pledge_bps;
+    issue.created_ts = now;
     issue.maturity_ts = params.maturity_ts;
     issue.subscription_end_ts = params.subscription_end_ts;
     issue.min_lot = params.min_lot;

@@ -125,6 +125,7 @@ const issue: Issue = {
   seq: 3n,
   bump: 255,
   pastDuePledgeBps: 3_000,
+  createdTs: 0n,
 };
 const ISSUE = issuePda(SOURCE, 3n).address;
 

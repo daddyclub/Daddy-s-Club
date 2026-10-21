@@ -174,6 +174,7 @@ const ISSUE_BYTES = account(
   u64(3n),
   u8(252),
   u16(2500),
+  i64(1_799_000_000n),
 );
 
 const HOLDER_BYTES = account(
@@ -317,6 +318,7 @@ describe('Issue (FR-001, FR-015)', () => {
       seq: 3n,
       bump: 252,
       pastDuePledgeBps: 2500,
+      createdTs: 1_799_000_000n,
     });
   });
 

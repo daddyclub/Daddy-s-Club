@@ -41,6 +41,7 @@ const issue: Issue = {
   seq: 0n,
   bump: 255,
   pastDuePledgeBps: 0,
+  createdTs: 0n,
 };
 const config: ProtocolConfig = {
   admin: key(13),

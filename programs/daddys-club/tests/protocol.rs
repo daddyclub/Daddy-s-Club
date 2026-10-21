@@ -378,6 +378,7 @@ fn update_config_does_not_reach_an_issue_that_already_exists() {
         seq: 0,
         bump: issue_bump,
         past_due_pledge_bps: 3_000,
+        created_ts: NOW - DAY,
     };
     let before = anchor_account(&issue);
 

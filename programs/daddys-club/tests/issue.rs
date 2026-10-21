@@ -244,6 +244,25 @@ fn creating_an_issue_takes_the_source_and_marks_the_revenue_seen_so_far() {
     assert_eq!(source.total_observed, OBSERVED);
 }
 
+/// `FR-030` turns the cut above into a rate, and a rate needs the moment the
+/// cut was taken. Nothing else on chain gives it: `subscription_end_ts` is the
+/// issuer's choice. A clock an hour off the one the terms were built on shows
+/// that the time is the chain's.
+#[test]
+fn an_issue_records_the_chain_time_of_its_revenue_cut() {
+    let mut mollusk = setup();
+    mollusk.sysvars.clock.unix_timestamp = NOW + 3_600;
+
+    let result = mollusk.process_and_validate_instruction(
+        &create_ix(ISSUER, ISSUE_SEQ, terms()),
+        &create_accounts(ISSUER, ISSUE_SEQ),
+        &[Check::success()],
+    );
+
+    let issue: Issue = decode(&result, &issue_key(ISSUER, ISSUE_SEQ));
+    assert_eq!(issue.created_ts, NOW + 3_600);
+}
+
 #[test]
 fn a_source_that_already_backs_an_issue_refuses_a_second_one() {
     let mollusk = setup();

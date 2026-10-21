@@ -328,6 +328,7 @@ pub fn stored_issue(state: IssueState, payout_index: u128) -> Issue {
         seq: ISSUE_SEQ,
         bump: issue_pda(demo_source(), ISSUE_SEQ).1,
         past_due_pledge_bps: demo_config_params().max_pledge_bps,
+        created_ts: NOW,
     }
 }
 
@@ -799,6 +800,7 @@ mod tests {
             seq: 0,
             bump: issue_pda(source, 0).1,
             past_due_pledge_bps: u16::MAX,
+            created_ts: i64::MAX,
         };
 
         let account = anchor_account(&issue);

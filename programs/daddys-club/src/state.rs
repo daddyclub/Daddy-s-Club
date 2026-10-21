@@ -105,6 +105,10 @@ pub struct Issue {
     /// later change of the cap must not reach an existing issue (`FR-036`).
     /// Last in the layout so the offsets clients already read do not move.
     pub past_due_pledge_bps: u16,
+    /// When `observed_before_issue` was cut for this issue (`FR-030`): the
+    /// rate before the issue is that cut over this time since `first_seen_ts`.
+    /// `subscription_end_ts` cannot stand in for it, the issuer picks it.
+    pub created_ts: i64,
 }
 
 impl Issue {
@@ -232,7 +236,7 @@ mod tests {
         // видно як зміну цифри, а не тільки як зрослу оренду.
         assert_eq!(ProtocolConfig::INIT_SPACE, 127);
         assert_eq!(RevenueSource::INIT_SPACE, 162);
-        assert_eq!(Issue::INIT_SPACE, 216);
+        assert_eq!(Issue::INIT_SPACE, 224);
         assert_eq!(HolderCheckpoint::INIT_SPACE, 97);
     }
 }
