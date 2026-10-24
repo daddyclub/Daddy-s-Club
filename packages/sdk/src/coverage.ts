@@ -34,3 +34,38 @@ export function coverageBps(
   const covered = source.totalObserved * term * BigInt(issue.pledgeBps);
   return covered / (elapsed * issue.obligationTotal);
 }
+
+export type DropSource = Pick<
+  RevenueSource,
+  'firstSeenTs' | 'observedBeforeIssue' | 'totalObserved'
+>;
+
+export type DropIssue = Pick<Issue, 'createdTs'>;
+
+const DROP_MIN_AGE_SECS = 14n * 86_400n;
+
+/**
+ * Revenue drop signal (`FR-030`): `true` when the rate through the hook since
+ * the issue is below half the rate the source showed before it.
+ *
+ * A signal, not an accusation: protocol revenue falls for market reasons too,
+ * and only what passed the hook is visible.
+ *
+ * Compared by cross-multiplying, so no rate is floored before the comparison.
+ * `observedBeforeIssue` is the source's latest cut: pass the issue that is the
+ * source's active one, or the base belongs to a different issue.
+ *
+ * `null` means too early to judge (under 14 days since the issue) or no time
+ * before the issue to take a base rate from.
+ */
+export function revenueDropSignal(
+  source: DropSource,
+  issue: DropIssue,
+  now: bigint,
+): boolean | null {
+  const spanBefore = issue.createdTs - source.firstSeenTs;
+  const spanAfter = now - issue.createdTs;
+  if (spanBefore <= 0n || spanAfter < DROP_MIN_AGE_SECS) return null;
+  const observedAfter = source.totalObserved - source.observedBeforeIssue;
+  return 2n * observedAfter * spanBefore < source.observedBeforeIssue * spanAfter;
+}

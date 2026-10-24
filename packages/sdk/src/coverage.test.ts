@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { type CoverageIssue, type CoverageSource, coverageBps } from './coverage.js';
+import {
+  type CoverageIssue,
+  type CoverageSource,
+  coverageBps,
+  type DropIssue,
+  type DropSource,
+  revenueDropSignal,
+} from './coverage.js';
 
 const DAY = 86_400n;
 const NOW = 1_800_000_000n;
@@ -61,5 +68,59 @@ describe('coverageBps', () => {
 
   it('is unknown against a zero obligation', () => {
     expect(coverageBps(source, { ...issue, obligationTotal: 0n }, NOW)).toBeNull();
+  });
+});
+
+describe('revenueDropSignal', () => {
+  const created = NOW - 14n * DAY;
+  const dropIssue: DropIssue = { createdTs: created };
+  // 1_000 a day over the 30 days before the issue.
+  const base: DropSource = {
+    firstSeenTs: created - 30n * DAY,
+    observedBeforeIssue: 30_000n,
+    totalObserved: 30_000n,
+  };
+  const withSince = (amount: bigint): DropSource => ({
+    ...base,
+    totalObserved: base.observedBeforeIssue + amount,
+  });
+
+  it('fires when the rate since the issue falls below half the rate before it', () => {
+    expect(revenueDropSignal(withSince(6_999n), dropIssue, NOW)).toBe(true);
+  });
+
+  it('stays quiet at exactly half the rate before', () => {
+    expect(revenueDropSignal(withSince(7_000n), dropIssue, NOW)).toBe(false);
+  });
+
+  it('stays quiet when revenue holds its pace', () => {
+    expect(revenueDropSignal(withSince(14_000n), dropIssue, NOW)).toBe(false);
+  });
+
+  it('fires when nothing has come through since the issue', () => {
+    expect(revenueDropSignal(withSince(0n), dropIssue, NOW)).toBe(true);
+  });
+
+  it('compares rates, not amounts: the same revenue over a longer base is a slower pace', () => {
+    const longBase = { ...withSince(6_999n), firstSeenTs: created - 60n * DAY };
+    expect(revenueDropSignal(longBase, dropIssue, NOW)).toBe(false);
+  });
+
+  it('judges from exactly fourteen days after the issue', () => {
+    expect(revenueDropSignal(withSince(0n), dropIssue, created + 14n * DAY)).toBe(true);
+  });
+
+  it('is unknown a second before fourteen days, however steep the fall', () => {
+    expect(revenueDropSignal(withSince(0n), dropIssue, created + 14n * DAY - 1n)).toBeNull();
+  });
+
+  it('is unknown without a span before the issue to take a rate from', () => {
+    expect(revenueDropSignal({ ...base, firstSeenTs: created }, dropIssue, NOW)).toBeNull();
+  });
+
+  it('does not overflow at the top of the u64 counters', () => {
+    const max = (1n << 64n) - 1n;
+    const huge = { ...base, observedBeforeIssue: max, totalObserved: max };
+    expect(revenueDropSignal(huge, dropIssue, NOW)).toBe(true);
   });
 });
